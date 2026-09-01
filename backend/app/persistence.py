@@ -153,6 +153,8 @@ class ContextUpdateRow(IdRow, Base):
 
 def build_session_factory(database_url: str):
     """Create a SQLAlchemy factory; production URL is PostgreSQL/Supabase."""
+    if database_url.startswith("postgresql://"):
+        database_url = database_url.replace("postgresql://", "postgresql+psycopg://", 1)
     return sessionmaker(create_engine(database_url, pool_pre_ping=True), expire_on_commit=False)
 
 
