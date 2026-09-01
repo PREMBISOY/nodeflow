@@ -9,6 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.orm import scoped_session
 
 from app.api.routes import router
 from app.core.container import build_container
@@ -43,8 +44,12 @@ def create_app(
     platform_store = PlatformStore()
     if repository is None and database_url:
         session_factory = build_session_factory(database_url)
-        repository = SqlAlchemyProjectRepository(session_factory())
-        platform_store = SqlPlatformStore(session_factory())
+        # FastAPI can execute synchronous endpoints concurrently. A plain
+        # Session stored on app state is not safe to share between requests;
+        # scoped_session provides an independent session for each worker thread.
+        sessions = scoped_session(session_factory)
+        repository = SqlAlchemyProjectRepository(sessions)
+        platform_store = SqlPlatformStore(sessions)
     container = build_container(repository, gateway)
     if load_demo_data and isinstance(container.repository, InMemoryProjectRepository):
         seed_demo(container.repository)
