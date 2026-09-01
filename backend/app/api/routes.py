@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Query, Request
 
 from app.schemas.common import success
-from app.schemas.intelligence import EventCreate, GitHubEventCreate, MessageCreate, OnboardingRequest
+from app.schemas.intelligence import ApprovalDecisionCreate, EventCreate, GitHubEventCreate, MessageCreate, OnboardingRequest
 
 
 router = APIRouter(prefix="/api/v1")
@@ -29,6 +29,15 @@ def get_project_context(project_id: UUID, request: Request):
 @router.get("/projects/{project_id}/collaboration")
 def get_collaboration_state(project_id: UUID, request: Request):
     return success(services(request).collaboration.get_state(project_id))
+
+
+@router.post("/projects/{project_id}/collaboration/approvals/{approval_event_id}")
+def decide_approval(
+    project_id: UUID, approval_event_id: UUID, payload: ApprovalDecisionCreate, request: Request
+):
+    if project_id != payload.project_id:
+        raise ValueError("Project ID must match the approval request")
+    return success(services(request).collaboration.decide_approval(approval_event_id, payload))
 
 
 @router.get("/agents/{agent_id}/context")
@@ -54,6 +63,11 @@ def create_event(payload: EventCreate, request: Request):
 @router.post("/integrations/github/events", status_code=201)
 def ingest_github_event(payload: GitHubEventCreate, request: Request):
     return success(services(request).git.ingest(payload))
+
+
+@router.get("/projects/{project_id}/git/activity")
+def get_git_activity(project_id: UUID, request: Request):
+    return success(services(request).git.get_activity(project_id))
 
 
 @router.post("/agents/{agent_id}/messages", status_code=201)

@@ -21,10 +21,12 @@ All handled failures are:
 | GET | `/api/v1/projects/{id}` | Project metadata |
 | GET | `/api/v1/projects/{id}/context` | Structured Project Brain context |
 | GET | `/api/v1/projects/{id}/collaboration` | Human–AI–AI–Human timeline, agents, notifications, and waiting approvals |
+| POST | `/api/v1/projects/{id}/collaboration/approvals/{eventId}` | Record an explicit human approval or rejection |
 | GET | `/api/v1/agents/{id}/context?scope=related&task_id={taskId}` | Scoped, optionally task-aware agent context |
 | GET | `/api/v1/agents/{id}/updates` | Relevant propagated updates |
 | POST | `/api/v1/events` | Record and process an event/change |
 | POST | `/api/v1/integrations/github/events` | Ingest a thin GitHub commit, PR, or branch event |
+| GET | `/api/v1/projects/{id}/git/activity` | Git event activity normalized for product flows |
 | POST | `/api/v1/agents/{id}/messages` | Send and record an agent message |
 | POST | `/api/v1/onboarding` | Generate a role-specific briefing |
 
@@ -48,6 +50,23 @@ GitHub remains the source of truth for source code. NodeFlow stores a compact ev
   "changed_files": ["backend/recommendations.py", "backend/routes.py"]
 }
 ```
+
+Pull-request events may include an `action`. `opened` and `synchronized` default to `review_required` and require approval unless `requires_approval` is explicitly set. A merged PR receives the `merged` flow stage. Read normalized history from `GET /projects/{id}/git/activity`.
+
+## Approval workflow
+
+`GET /projects/{id}/collaboration` returns `approvals` with a `waiting_approval`, `approved`, or `rejected` status. To make a decision, post an explicit human action:
+
+```json
+{
+  "project_id": "10000000-0000-0000-0000-000000000001",
+  "decision": "approved",
+  "actor_name": "Prem",
+  "comment": "API contract looks good."
+}
+```
+
+The endpoint is append-only: it records a project event and rejects a second decision for the same approval. It deliberately does not mutate task state or execute a deployment.
 
 ## Frontend collaboration requirements
 
