@@ -1,3 +1,7 @@
+import hashlib
+import hmac
+import json
+
 from fastapi.testclient import TestClient
 from app.main import create_app
 from tests.fixtures.demo_data import DEMO_IDS, seed_demo
@@ -22,9 +26,9 @@ def test_join_is_idempotent_and_non_members_cannot_read_members():
 
 def test_member_can_create_and_list_only_their_team_projects():
     api=client(); owner=register(api, 'Prem', 'prem@example.com'); team=api.post('/api/v1/teams', json={'name':'HackVerse'}, headers=auth(owner)).json()['data']
-    created=api.post(f"/api/v1/teams/{team['id']}/projects", json={'name':'NodeFlow','purpose':'Shared context','technology_stack':['FastAPI']}, headers=auth(owner))
+    created=api.post(f"/api/v1/teams/{team['id']}/projects", json={'name':'NodeFlow','purpose':'Shared context','technology_stack':['FastAPI']}, headers=auth(team['access_token']))
     assert created.status_code == 201
-    projects=api.get(f"/api/v1/teams/{team['id']}/projects", headers=auth(owner)).json()['data']
+    projects=api.get(f"/api/v1/teams/{team['id']}/projects", headers=auth(team['access_token'])).json()['data']
     assert [project['id'] for project in projects] == [created.json()['data']['id']]
 
 def test_active_team_blocks_cross_tenant_project_agent_and_event_access():
@@ -48,6 +52,10 @@ def test_project_creation_and_listing_are_active_team_scoped():
     created=api.post(f"/api/v1/teams/{team['id']}/projects",headers=auth(active),json={'name':'Platform','purpose':'Shared context'}); assert created.status_code == 201
     assert api.get(f"/api/v1/teams/{team['id']}/projects",headers=auth(active)).json()['data'][0]['id'] == created.json()['data']['id']
 
+def test_team_project_endpoints_require_an_exact_active_team():
+    api=client(); token=register(api,'Prem','prem@example.com'); team=api.post('/api/v1/teams',json={'name':'Team A'},headers=auth(token)).json()['data']
+    assert api.get(f"/api/v1/teams/{team['id']}/projects",headers=auth(token)).status_code == 403
+
 def test_public_github_repository_connection_is_team_and_project_scoped(monkeypatch):
     monkeypatch.setattr('app.platform.public_repository_metadata', lambda value: {'full_name': 'nodeflow/public-repo', 'html_url': 'https://github.com/nodeflow/public-repo', 'default_branch': 'main'})
     api = client(); owner = register(api, 'Prem', 'prem@example.com')
@@ -58,4 +66,21 @@ def test_public_github_repository_connection_is_team_and_project_scoped(monkeypa
     assert connected.status_code == 201
     assert connected.json()['data']['repository']['project_id'] == project['id']
     outsider = register(api, 'Aarya', 'aarya@example.com')
-    assert api.get(f"/api/v1/teams/{team['id']}/github/repositories", headers=auth(outsider)).status_code == 404
+    assert api.get(f"/api/v1/teams/{team['id']}/github/repositories", headers=auth(outsider)).status_code == 403
+
+def test_github_webhook_requires_a_valid_signature_and_ingests_connected_repository(monkeypatch):
+    monkeypatch.setenv('GITHUB_WEBHOOK_SECRET', 'webhook-test-secret')
+    monkeypatch.setattr('app.platform.public_repository_metadata', lambda value: {'full_name': 'nodeflow/public-repo', 'html_url': 'https://github.com/nodeflow/public-repo', 'default_branch': 'main'})
+    api=client(); token=register(api,'Prem','prem@example.com'); team=api.post('/api/v1/teams',json={'name':'Team A'},headers=auth(token)).json()['data']; active=team['access_token']
+    project=api.post(f"/api/v1/teams/{team['id']}/projects",headers=auth(active),json={'name':'Platform','purpose':'Shared context'}).json()['data']
+    api.post(f"/api/v1/teams/{team['id']}/github/repositories",headers=auth(active),json={'project_id':project['id'],'repository':'nodeflow/public-repo'})
+    payload={'repository':{'full_name':'nodeflow/public-repo'},'ref':'refs/heads/main','after':'abc123','sender':{'login':'prem'},'commits':[{'added':['backend/app/main.py'],'modified':[],'removed':[]}]}
+    body=json.dumps(payload).encode(); signature='sha256='+hmac.new(b'webhook-test-secret',body,hashlib.sha256).hexdigest()
+    assert api.post('/api/v1/integrations/github/webhook',content=body,headers={'X-GitHub-Event':'push'}).status_code == 401
+    response=api.post('/api/v1/integrations/github/webhook',content=body,headers={'X-GitHub-Event':'push','X-Hub-Signature-256':signature})
+    assert response.status_code == 202 and response.json()['success'] is True
+
+def test_oauth_state_is_consumed_once():
+    app=create_app(load_demo_data=False); store=app.state.platform_store; nonce='one-time-nonce'; store.remember_oauth_state(nonce)
+    assert store.consume_oauth_state(nonce) is True
+    assert store.consume_oauth_state(nonce) is False

@@ -50,6 +50,7 @@ def create_app(
         sessions = scoped_session(session_factory)
         repository = SqlAlchemyProjectRepository(sessions)
         platform_store = SqlPlatformStore(sessions)
+        app.state.database_sessions = sessions
     container = build_container(repository, gateway)
     if load_demo_data and isinstance(container.repository, InMemoryProjectRepository):
         seed_demo(container.repository)
@@ -61,6 +62,15 @@ def create_app(
     app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["GET", "POST", "OPTIONS"], allow_headers=["Authorization", "Content-Type"])
     app.include_router(router)
     app.include_router(platform_router)
+
+    @app.middleware("http")
+    async def release_database_session(request: Request, call_next):
+        try:
+            return await call_next(request)
+        finally:
+            sessions = getattr(request.app.state, "database_sessions", None)
+            if sessions is not None:
+                sessions.remove()
 
     @app.get("/health")
     def health():

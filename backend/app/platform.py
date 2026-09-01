@@ -16,12 +16,13 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import httpx
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Cookie, Header, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from app.models import Project
+from app.schemas.intelligence import GitHubEventCreate
 
 
 def utc_now() -> datetime: return datetime.now(timezone.utc)
@@ -56,6 +57,7 @@ class PlatformStore:
         self.project_teams: dict[UUID, UUID] = {}; self.revoked: set[str] = set()
         self.projects: dict[UUID, Project] = {}
         self.github_users: dict[str, UUID] = {}; self.github_repositories: dict[tuple[UUID, UUID], GitHubRepository] = {}
+        self.oauth_states: set[str] = set()
     @staticmethod
     def _hash(password: str, salt: bytes | None = None) -> str:
         salt = salt or secrets.token_bytes(16)
@@ -111,6 +113,14 @@ class PlatformStore:
         self.github_repositories[(team_id, request.project_id)] = repo; return repo
     def github_repositories_for(self, user_id: UUID, team_id: UUID) -> list[GitHubRepository]:
         self.require_member(user_id, team_id); return [repo for repo in self.github_repositories.values() if repo.team_id == team_id]
+    def github_repository_for(self, full_name: str) -> GitHubRepository | None:
+        matches = [repo for repo in self.github_repositories.values() if repo.full_name.lower() == full_name.lower()]
+        if len(matches) > 1: raise ValueError("Repository is connected to more than one project")
+        return matches[0] if matches else None
+    def remember_oauth_state(self, nonce: str) -> None: self.oauth_states.add(nonce)
+    def consume_oauth_state(self, nonce: str) -> bool:
+        if nonce not in self.oauth_states: return False
+        self.oauth_states.remove(nonce); return True
 
 
 class SqlPlatformStore:
@@ -188,6 +198,15 @@ class SqlPlatformStore:
         self.require_member(user_id, team_id)
         rows = self.session.execute(text("select id,team_id,project_id,full_name,html_url,default_branch,connected_by,connected_at from team_github_repositories where team_id=:team order by connected_at"), {"team":str(team_id)})
         return [GitHubRepository(id=row.id,team_id=row.team_id,project_id=row.project_id,full_name=row.full_name,html_url=row.html_url,default_branch=row.default_branch,connected_by=row.connected_by,connected_at=row.connected_at) for row in rows]
+    def github_repository_for(self, full_name: str) -> GitHubRepository | None:
+        rows = list(self.session.execute(text("select id,team_id,project_id,full_name,html_url,default_branch,connected_by,connected_at from team_github_repositories where lower(full_name)=lower(:name)"), {"name":full_name}))
+        if len(rows) > 1: raise ValueError("Repository is connected to more than one project")
+        if not rows: return None
+        row = rows[0]; return GitHubRepository(id=row.id,team_id=row.team_id,project_id=row.project_id,full_name=row.full_name,html_url=row.html_url,default_branch=row.default_branch,connected_by=row.connected_by,connected_at=row.connected_at)
+    def remember_oauth_state(self, nonce: str) -> None:
+        self.session.execute(text("insert into oauth_login_states (nonce,expires_at) values (:nonce,now() + interval '10 minutes')"), {"nonce":nonce}); self.session.commit()
+    def consume_oauth_state(self, nonce: str) -> bool:
+        row = self.session.execute(text("delete from oauth_login_states where nonce=:nonce and expires_at > now() returning nonce"), {"nonce":nonce}).first(); self.session.commit(); return row is not None
 
 
 class SessionCodec:
@@ -205,12 +224,13 @@ class SessionCodec:
         data = json.loads(_unb64(body));
         if data["exp"] < int(utc_now().timestamp()): raise PermissionError("Session expired")
         return data
-    def issue_oauth_state(self) -> str:
-        payload = {"typ":"github_oauth", "exp": int((utc_now() + timedelta(minutes=10)).timestamp()), "nonce": secrets.token_urlsafe(16)}
+    def issue_oauth_state(self, nonce: str) -> str:
+        payload = {"typ":"github_oauth", "exp": int((utc_now() + timedelta(minutes=10)).timestamp()), "nonce": nonce}
         body = _b64(json.dumps(payload, separators=(",", ":")).encode()); return body + "." + _b64(hmac.new(self.secret, body.encode(), hashlib.sha256).digest())
-    def read_oauth_state(self, state: str) -> None:
+    def read_oauth_state(self, state: str) -> str:
         data = self.read(state)
         if data.get("typ") != "github_oauth": raise PermissionError("Invalid OAuth state")
+        return data["nonce"]
 
 
 router = APIRouter(prefix="/api/v1")
@@ -256,6 +276,24 @@ def public_repository_metadata(value: str) -> dict:
     if data.get("private") is not False: raise HTTPException(422, "Only public GitHub repositories can be connected")
     return {"full_name": data["full_name"], "html_url": data["html_url"], "default_branch": data.get("default_branch") or "main"}
 
+def code_challenge(verifier: str) -> str:
+    return _b64(hashlib.sha256(verifier.encode()).digest())
+
+def github_webhook_event(payload: dict, event_name: str, project_id: UUID) -> GitHubEventCreate | None:
+    repository = payload.get("repository", {}).get("full_name")
+    if not repository: return None
+    sender = payload.get("sender", {}).get("login")
+    if event_name == "push":
+        commits = payload.get("commits", [])
+        files = [path for commit in commits for key in ("added", "modified", "removed") for path in commit.get(key, [])]
+        return GitHubEventCreate(project_id=project_id, event_type="commit", action="updated", repository=repository, summary=f"Push to {payload.get('ref', 'repository')} by {sender or 'unknown'}", changed_files=list(dict.fromkeys(files)), ref=payload.get("ref"), commit_sha=payload.get("after"), actor_name=sender)
+    if event_name == "pull_request":
+        pull_request, action = payload.get("pull_request", {}), payload.get("action")
+        normalized = "merged" if action == "closed" and pull_request.get("merged") else {"synchronize":"synchronized", "reopened":"opened"}.get(action, action)
+        if normalized not in {"opened", "synchronized", "merged", "closed"}: return None
+        return GitHubEventCreate(project_id=project_id, event_type="pull_request", action=normalized, repository=repository, summary=f"Pull request #{payload.get('number')} {normalized}", changed_files=[], ref=pull_request.get("head", {}).get("ref"), commit_sha=pull_request.get("head", {}).get("sha"), pull_request_number=payload.get("number"), actor_name=sender)
+    return None
+
 @router.post("/auth/register", status_code=201)
 def register(payload: RegisterRequest, request: Request):
     try: user = platform(request).register(payload)
@@ -270,15 +308,22 @@ def login(payload: LoginRequest, request: Request):
 @router.get("/auth/github")
 def github_login(request: Request):
     client_id, _client_secret, redirect_uri = github_configuration()
-    query = urlencode({"client_id":client_id, "redirect_uri":redirect_uri, "scope":"read:user user:email", "state":codec(request).issue_oauth_state()})
-    return RedirectResponse(f"https://github.com/login/oauth/authorize?{query}")
+    nonce, verifier = secrets.token_urlsafe(32), secrets.token_urlsafe(48)
+    platform(request).remember_oauth_state(nonce)
+    query = urlencode({"client_id":client_id, "redirect_uri":redirect_uri, "scope":"read:user user:email", "state":codec(request).issue_oauth_state(nonce), "code_challenge":code_challenge(verifier), "code_challenge_method":"S256"})
+    response = RedirectResponse(f"https://github.com/login/oauth/authorize?{query}")
+    response.set_cookie("nodeflow_oauth", f"{nonce}.{verifier}", max_age=600, httponly=True, secure=True, samesite="lax", path="/api/v1/auth/github")
+    return response
 @router.get("/auth/github/callback")
-def github_callback(code: str, state: str, request: Request):
-    try: codec(request).read_oauth_state(state)
+def github_callback(code: str, state: str, request: Request, nodeflow_oauth: str | None = Cookie(default=None)):
+    try:
+        nonce = codec(request).read_oauth_state(state)
+        cookie_nonce, verifier = (nodeflow_oauth or "").split(".", 1)
+        if not hmac.compare_digest(nonce, cookie_nonce) or not platform(request).consume_oauth_state(nonce): raise PermissionError("OAuth state was already used")
     except (ValueError, PermissionError): raise HTTPException(400, "Invalid or expired GitHub OAuth state")
     client_id, client_secret, redirect_uri = github_configuration()
     try:
-        token_response = httpx.post("https://github.com/login/oauth/access_token", data={"client_id":client_id,"client_secret":client_secret,"code":code,"redirect_uri":redirect_uri}, headers={"Accept":"application/json"}, timeout=15)
+        token_response = httpx.post("https://github.com/login/oauth/access_token", data={"client_id":client_id,"client_secret":client_secret,"code":code,"redirect_uri":redirect_uri,"code_verifier":verifier}, headers={"Accept":"application/json"}, timeout=15)
         access_token = token_response.json().get("access_token") if token_response.is_success else None
         if not access_token: raise HTTPException(401, "GitHub sign-in was rejected")
         profile_response = httpx.get("https://api.github.com/user", headers={"Authorization":f"Bearer {access_token}","Accept":"application/vnd.github+json"}, timeout=15)
@@ -291,7 +336,7 @@ def github_callback(code: str, state: str, request: Request):
     user = platform(request).github_user(str(profile["id"]), profile["login"], profile.get("name"), email)
     teams = platform(request).teams_for(user.id); active = teams[0].id if teams else None
     token = codec(request).issue(user.id, active)
-    return RedirectResponse("/#access_token=" + token, status_code=303)
+    response = RedirectResponse("/#access_token=" + token, status_code=303); response.delete_cookie("nodeflow_oauth", path="/api/v1/auth/github"); return response
 @router.post("/auth/logout")
 def logout(request: Request, authorization: str | None = Header(default=None)):
     _user, _team, data = current(request, authorization); platform(request).revoke(data["jti"]); return envelope({"logged_out": True})
@@ -303,7 +348,8 @@ def switch_team(payload: ActiveTeamRequest, request: Request, authorization: str
     user, _, _ = current(request, authorization); platform(request).require_member(user.id, payload.team_id); return envelope({"access_token": codec(request).issue(user.id, payload.team_id), "active_team_id": payload.team_id})
 @router.post("/teams", status_code=201)
 def create_team(payload: TeamCreateRequest, request: Request, authorization: str | None = Header(default=None)):
-    user, _, _ = current(request, authorization); return envelope(platform(request).create_team(user, payload.name))
+    user, _, _ = current(request, authorization); team = platform(request).create_team(user, payload.name)
+    return envelope({**team.model_dump(mode="json"), "access_token": codec(request).issue(user.id, team.id), "active_team_id": team.id})
 @router.get("/teams")
 def teams(request: Request, authorization: str | None = Header(default=None)):
     user, _, _ = current(request, authorization); return envelope(platform(request).teams_for(user.id))
@@ -315,7 +361,9 @@ def get_team(team_id: UUID, request: Request, authorization: str | None = Header
 @router.post("/teams/join")
 def join_team(payload: JoinTeamRequest, request: Request, authorization: str | None = Header(default=None)):
     user, _, _ = current(request, authorization)
-    try: return envelope(platform(request).join(user, payload.team_code))
+    try:
+        team = platform(request).join(user, payload.team_code)
+        return envelope({**team.model_dump(mode="json"), "access_token": codec(request).issue(user.id, team.id), "active_team_id": team.id})
     except LookupError: raise HTTPException(404, "Team not found")
 @router.post("/teams/{team_id}/leave")
 def leave_team(team_id: UUID, request: Request, authorization: str | None = Header(default=None)):
@@ -336,10 +384,7 @@ def members(team_id: UUID, request: Request, authorization: str | None = Header(
 
 def active_team_for(request: Request, team_id: UUID, authorization: str | None):
     user, active, _ = current(request, authorization)
-    # A just-created account/team can have a valid session without an active
-    # team claim. Membership is still required; a conflicting active team is
-    # rejected to prevent accidental cross-team requests.
-    if active is not None and active != team_id: raise HTTPException(403, "Select the requested team as active")
+    if active != team_id: raise HTTPException(403, "Select the requested team as active")
     try: platform(request).require_member(user.id, team_id)
     except PermissionError: raise HTTPException(404, "Team not found")
     return user
@@ -372,5 +417,27 @@ def connect_github_repository(team_id: UUID, payload: GitHubRepositoryConnectReq
     try: platform(request).require_project(user.id, team_id, payload.project_id)
     except PermissionError: raise HTTPException(404, "Project not found")
     metadata = public_repository_metadata(payload.repository)
+    try: existing = platform(request).github_repository_for(metadata["full_name"])
+    except ValueError: raise HTTPException(409, "Repository connection is ambiguous")
+    if existing and existing.project_id != payload.project_id:
+        raise HTTPException(409, "This GitHub repository is already connected to another project")
     connected = platform(request).connect_github_repository(user.id, team_id, payload, metadata)
-    return envelope({"repository": connected, "webhook_url": str(request.base_url).rstrip("/") + "/api/v1/integrations/github/events"})
+    return envelope({"repository": connected, "webhook_url": str(request.base_url).rstrip("/") + "/api/v1/integrations/github/webhook"})
+
+@router.post("/integrations/github/webhook", status_code=202)
+async def ingest_github_webhook(request: Request, x_github_event: str | None = Header(default=None), x_hub_signature_256: str | None = Header(default=None)):
+    secret = os.getenv("GITHUB_WEBHOOK_SECRET")
+    if not secret: raise HTTPException(503, "GitHub webhooks are not configured")
+    body = await request.body()
+    expected = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    if not x_hub_signature_256 or not hmac.compare_digest(expected, x_hub_signature_256): raise HTTPException(401, "Invalid GitHub webhook signature")
+    try: payload = json.loads(body)
+    except json.JSONDecodeError: raise HTTPException(400, "Invalid GitHub webhook payload")
+    full_name = payload.get("repository", {}).get("full_name")
+    if not full_name: raise HTTPException(400, "GitHub webhook repository is required")
+    try: repository = platform(request).github_repository_for(full_name)
+    except ValueError: raise HTTPException(409, "Repository connection is ambiguous")
+    if repository is None: raise HTTPException(404, "GitHub repository is not connected")
+    event = github_webhook_event(payload, x_github_event or "", repository.project_id)
+    if event is None: return envelope({"ignored": True})
+    return envelope(request.app.state.container.git.ingest(event))
