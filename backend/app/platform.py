@@ -83,12 +83,10 @@ class PlatformStore:
     def require_project(self, user_id: UUID, team_id: UUID, project_id: UUID) -> None:
         self.require_member(user_id, team_id)
         if self.project_teams.get(project_id) != team_id: raise PermissionError("Project is outside the active team")
-    def create_project(self, team_id: UUID, request: ProjectCreateRequest) -> Project:
-        project = Project(name=request.name, purpose=request.purpose, technology_stack=request.technology_stack)
-        self.projects[project.id] = project; self.project_teams[project.id] = team_id
-        return project
-    def projects_for(self, team_id: UUID) -> list[Project]:
-        return [project for project_id, project in self.projects.items() if self.project_teams.get(project_id) == team_id]
+    def create_project(self, user_id: UUID, team_id: UUID, project: Project) -> Project:
+        self.require_member(user_id, team_id); self.project_teams[project.id] = team_id; return project
+    def list_projects(self, user_id: UUID, team_id: UUID, projects: list[Project]) -> list[Project]:
+        self.require_member(user_id, team_id); return [project for project in projects if self.project_teams.get(project.id) == team_id]
 
 
 class SqlPlatformStore:
@@ -139,18 +137,22 @@ class SqlPlatformStore:
         self.require_member(user_id,team_id)
         row=self.session.execute(text("select 1 from projects where id=:project and team_id=:team"), {"project":str(project_id),"team":str(team_id)}).first()
         if not row: raise PermissionError("Project is outside the active team")
-    def create_project(self, team_id: UUID, request: ProjectCreateRequest) -> Project:
-        project = Project(name=request.name, purpose=request.purpose, technology_stack=request.technology_stack)
-        self.session.execute(text("insert into projects (id,name,purpose,technology_stack,status,created_at,team_id) values (:id,:name,:purpose,:stack,:status,:created,:team)"), {"id":str(project.id),"name":project.name,"purpose":project.purpose,"stack":json.dumps(project.technology_stack),"status":project.status,"created":project.created_at,"team":str(team_id)})
-        self.session.commit()
-        return project
-    def projects_for(self, team_id: UUID) -> list[Project]:
-        rows = self.session.execute(text("select id,name,purpose,technology_stack,status,created_at from projects where team_id=:team order by created_at"), {"team":str(team_id)})
-        return [Project.model_validate(dict(row._mapping)) for row in rows]
+    def create_project(self,user_id: UUID,team_id: UUID,project: Project) -> Project:
+        self.require_member(user_id,team_id)
+        self.session.execute(text("insert into projects (id,team_id,name,purpose,technology_stack,status,created_at) values (:id,:team,:name,:purpose,:stack,:status,:created)"), {"id":str(project.id),"team":str(team_id),"name":project.name,"purpose":project.purpose,"stack":json.dumps(project.technology_stack),"status":project.status,"created":project.created_at})
+        self.session.commit(); return project
+    def list_projects(self,user_id: UUID,team_id: UUID,projects: list[Project] | None = None) -> list[Project]:
+        self.require_member(user_id,team_id)
+        rows=self.session.execute(text("select id,name,purpose,technology_stack,status,created_at from projects where team_id=:team order by created_at"), {"team":str(team_id)})
+        return [Project(id=row.id,name=row.name,purpose=row.purpose,technology_stack=row.technology_stack,status=row.status,created_at=row.created_at) for row in rows]
 
 
 class SessionCodec:
-    def __init__(self) -> None: self.secret = os.getenv("JWT_SECRET", "development-only-change-me").encode()
+    def __init__(self) -> None:
+        secret = os.getenv("JWT_SECRET")
+        if os.getenv("DATABASE_URL") and (not secret or secret == "development-only-change-me"):
+            raise RuntimeError("JWT_SECRET must be set to a secure value when DATABASE_URL is configured")
+        self.secret = (secret or "development-only-change-me").encode()
     def issue(self, user_id: UUID, active_team_id: UUID | None = None) -> str:
         payload = {"sub": str(user_id), "team": str(active_team_id) if active_team_id else None, "exp": int((utc_now() + timedelta(hours=12)).timestamp()), "jti": secrets.token_urlsafe(16)}
         body = _b64(json.dumps(payload, separators=(",", ":")).encode()); signature = _b64(hmac.new(self.secret, body.encode(), hashlib.sha256).digest()); return body + "." + signature
@@ -240,16 +242,26 @@ def members(team_id: UUID, request: Request, authorization: str | None = Header(
     except PermissionError: raise HTTPException(403, "Forbidden")
     return envelope(platform(request).members_for(team_id))
 
-@router.get("/teams/{team_id}/projects")
-def projects(team_id: UUID, request: Request, authorization: str | None = Header(default=None)):
-    user, _, _ = current(request, authorization)
+def active_team_for(request: Request, team_id: UUID, authorization: str | None):
+    user, active, _ = current(request, authorization)
+    if active != team_id: raise HTTPException(403, "Select the requested team as active")
     try: platform(request).require_member(user.id, team_id)
     except PermissionError: raise HTTPException(404, "Team not found")
-    return envelope(platform(request).projects_for(team_id))
+    return user
+
+@router.get("/teams/{team_id}/projects")
+def list_team_projects(team_id: UUID, request: Request, authorization: str | None = Header(default=None)):
+    user = active_team_for(request, team_id, authorization)
+    repository = request.app.state.container.repository
+    projects = list(repository.projects.values()) if hasattr(repository, "projects") else []
+    return envelope(platform(request).list_projects(user.id, team_id, projects))
 
 @router.post("/teams/{team_id}/projects", status_code=201)
-def create_project(team_id: UUID, payload: ProjectCreateRequest, request: Request, authorization: str | None = Header(default=None)):
-    user, _, _ = current(request, authorization)
-    try: platform(request).require_member(user.id, team_id)
-    except PermissionError: raise HTTPException(404, "Team not found")
-    return envelope(platform(request).create_project(team_id, payload))
+def create_team_project(team_id: UUID, payload: ProjectCreateRequest, request: Request, authorization: str | None = Header(default=None)):
+    user = active_team_for(request, team_id, authorization)
+    project = Project(name=payload.name, purpose=payload.purpose, technology_stack=payload.technology_stack)
+    saved = platform(request).create_project(user.id, team_id, project)
+    repository = request.app.state.container.repository
+    if isinstance(platform(request), PlatformStore):
+        repository.projects[saved.id] = saved
+    return envelope(saved)
