@@ -81,7 +81,11 @@ def get_git_activity(project_id: UUID, request: Request, authorization: str | No
 
 @router.post("/agents/{agent_id}/messages", status_code=201)
 def send_agent_message(agent_id: UUID, payload: MessageCreate, request: Request, authorization: str | None = Header(default=None)):
-    require_project_access(request, services(request).repository.get_agent(agent_id).project_id, authorization)
+    sender = services(request).repository.get_agent(agent_id)
+    recipient = services(request).repository.get_agent(payload.recipient_agent_id)
+    if sender.project_id != recipient.project_id:
+        raise ValueError("Sender and recipient agents must belong to the same project")
+    require_project_access(request, sender.project_id, authorization)
     return success(services(request).messaging.send(agent_id, payload))
 
 

@@ -18,6 +18,7 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from app.models import Project
 
 
 def utc_now() -> datetime: return datetime.now(timezone.utc)
@@ -45,6 +46,7 @@ class PlatformStore:
         self.users: dict[UUID, User] = {}; self.by_email: dict[str, tuple[UUID, str]] = {}
         self.teams: dict[UUID, Team] = {}; self.memberships: dict[tuple[UUID, UUID], Membership] = {}
         self.project_teams: dict[UUID, UUID] = {}; self.revoked: set[str] = set()
+        self.projects: dict[UUID, Project] = {}
     @staticmethod
     def _hash(password: str, salt: bytes | None = None) -> str:
         salt = salt or secrets.token_bytes(16)
@@ -81,6 +83,12 @@ class PlatformStore:
     def require_project(self, user_id: UUID, team_id: UUID, project_id: UUID) -> None:
         self.require_member(user_id, team_id)
         if self.project_teams.get(project_id) != team_id: raise PermissionError("Project is outside the active team")
+    def create_project(self, team_id: UUID, request: ProjectCreateRequest) -> Project:
+        project = Project(name=request.name, purpose=request.purpose, technology_stack=request.technology_stack)
+        self.projects[project.id] = project; self.project_teams[project.id] = team_id
+        return project
+    def projects_for(self, team_id: UUID) -> list[Project]:
+        return [project for project_id, project in self.projects.items() if self.project_teams.get(project_id) == team_id]
 
 
 class SqlPlatformStore:
@@ -131,6 +139,14 @@ class SqlPlatformStore:
         self.require_member(user_id,team_id)
         row=self.session.execute(text("select 1 from projects where id=:project and team_id=:team"), {"project":str(project_id),"team":str(team_id)}).first()
         if not row: raise PermissionError("Project is outside the active team")
+    def create_project(self, team_id: UUID, request: ProjectCreateRequest) -> Project:
+        project = Project(name=request.name, purpose=request.purpose, technology_stack=request.technology_stack)
+        self.session.execute(text("insert into projects (id,name,purpose,technology_stack,status,created_at,team_id) values (:id,:name,:purpose,:stack,:status,:created,:team)"), {"id":str(project.id),"name":project.name,"purpose":project.purpose,"stack":json.dumps(project.technology_stack),"status":project.status,"created":project.created_at,"team":str(team_id)})
+        self.session.commit()
+        return project
+    def projects_for(self, team_id: UUID) -> list[Project]:
+        rows = self.session.execute(text("select id,name,purpose,technology_stack,status,created_at from projects where team_id=:team order by created_at"), {"team":str(team_id)})
+        return [Project.model_validate(dict(row._mapping)) for row in rows]
 
 
 class SessionCodec:
@@ -223,3 +239,17 @@ def members(team_id: UUID, request: Request, authorization: str | None = Header(
     try: platform(request).require_member(user.id, team_id)
     except PermissionError: raise HTTPException(403, "Forbidden")
     return envelope(platform(request).members_for(team_id))
+
+@router.get("/teams/{team_id}/projects")
+def projects(team_id: UUID, request: Request, authorization: str | None = Header(default=None)):
+    user, _, _ = current(request, authorization)
+    try: platform(request).require_member(user.id, team_id)
+    except PermissionError: raise HTTPException(404, "Team not found")
+    return envelope(platform(request).projects_for(team_id))
+
+@router.post("/teams/{team_id}/projects", status_code=201)
+def create_project(team_id: UUID, payload: ProjectCreateRequest, request: Request, authorization: str | None = Header(default=None)):
+    user, _, _ = current(request, authorization)
+    try: platform(request).require_member(user.id, team_id)
+    except PermissionError: raise HTTPException(404, "Team not found")
+    return envelope(platform(request).create_project(team_id, payload))

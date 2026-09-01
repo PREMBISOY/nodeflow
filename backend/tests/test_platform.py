@@ -20,6 +20,13 @@ def test_join_is_idempotent_and_non_members_cannot_read_members():
     assert api.post('/api/v1/teams/join', json={'team_code':team['team_code']}, headers=auth(guest)).status_code == 200
     outsider=register(api, 'Sunal', 'sunal@example.com'); assert api.get(f"/api/v1/teams/{team['id']}/members", headers=auth(outsider)).status_code == 403
 
+def test_member_can_create_and_list_only_their_team_projects():
+    api=client(); owner=register(api, 'Prem', 'prem@example.com'); team=api.post('/api/v1/teams', json={'name':'HackVerse'}, headers=auth(owner)).json()['data']
+    created=api.post(f"/api/v1/teams/{team['id']}/projects", json={'name':'NodeFlow','purpose':'Shared context','technology_stack':['FastAPI']}, headers=auth(owner))
+    assert created.status_code == 201
+    projects=api.get(f"/api/v1/teams/{team['id']}/projects", headers=auth(owner)).json()['data']
+    assert [project['id'] for project in projects] == [created.json()['data']['id']]
+
 def test_active_team_blocks_cross_tenant_project_agent_and_event_access():
     app=create_app(); seed_demo(app.state.container.repository); app.state.enforce_tenants=True
     api=TestClient(app); token=register(api, 'Prem', 'prem@example.com'); store=app.state.platform_store; user=store.login(type('Login', (), {'email':'prem@example.com','password':'secure-password'})())
