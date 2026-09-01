@@ -1,11 +1,17 @@
-"""Provider-neutral HTTP client for the NodeFlow Agent Gateway."""
+"""Provider-neutral client for NodeFlow's authenticated shared API."""
+import os
+
 import httpx
 
 
 class NodeFlowClient:
-    def __init__(self, base_url: str = "http://localhost:8000"):
-        self.base_url = base_url.rstrip("/")
-        self.client = httpx.Client(base_url=self.base_url, timeout=15)
+    def __init__(self, base_url: str | None = None, access_token: str | None = None):
+        self.base_url = (base_url or os.getenv("NODEFLOW_API_URL") or "").rstrip("/")
+        if not self.base_url:
+            raise ValueError("Set NODEFLOW_API_URL or pass base_url for the shared NodeFlow deployment.")
+        token = access_token or os.getenv("NODEFLOW_ACCESS_TOKEN")
+        headers = {"Authorization": f"Bearer {token}"} if token else None
+        self.client = httpx.Client(base_url=self.base_url, timeout=15, headers=headers)
 
     def _request(self, method: str, path: str, **kwargs):
         response = self.client.request(method, path, **kwargs)

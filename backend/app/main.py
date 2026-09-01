@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from app.api.routes import router
 from app.core.container import build_container
 from app.core.demo_data import seed_demo
+from app.services.agent_gateway import AgentGateway
 from app.services.repository import EntityNotFoundError, InMemoryProjectRepository, ProjectKnowledgeRepository
 
 
@@ -24,6 +25,7 @@ def error_response(status_code: int, code: str, message: str) -> JSONResponse:
 
 def create_app(
     repository: ProjectKnowledgeRepository | None = None,
+    gateway: AgentGateway | None = None,
     load_demo_data: bool = True,
 ) -> FastAPI:
     app = FastAPI(
@@ -31,7 +33,7 @@ def create_app(
         version="0.1.0",
         description="Shared project brain, impact analysis, context propagation, messaging, and onboarding.",
     )
-    container = build_container(repository)
+    container = build_container(repository, gateway)
     if load_demo_data and isinstance(container.repository, InMemoryProjectRepository):
         seed_demo(container.repository)
     app.state.container = container

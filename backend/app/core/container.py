@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from app.engines.impact_analysis import ChangeImpactAnalyzer
 from app.engines.relevance import RelevanceEngine
-from app.services.agent_gateway import RecordingAgentGateway
+from app.services.agent_gateway import AgentGateway, RecordingAgentGateway
 from app.services.context_service import ContextService
 from app.services.event_processor import EventProcessor
 from app.services.git_intelligence import GitIntelligenceService
@@ -26,15 +26,18 @@ class ServiceContainer:
     onboarding: OnboardingService
     git: GitIntelligenceService
     collaboration: CollaborationService
-    gateway: RecordingAgentGateway
+    gateway: AgentGateway
 
 
-def build_container(repository: ProjectKnowledgeRepository | None = None) -> ServiceContainer:
+def build_container(
+    repository: ProjectKnowledgeRepository | None = None,
+    gateway: AgentGateway | None = None,
+) -> ServiceContainer:
     repository = repository or InMemoryProjectRepository()
     brain = ProjectBrain(repository)
     impact = ChangeImpactAnalyzer(repository)
     relevance = RelevanceEngine()
-    gateway = RecordingAgentGateway()
+    gateway = gateway or RecordingAgentGateway()
     events = EventProcessor(repository, impact, relevance, gateway)
     return ServiceContainer(
         repository=repository,
