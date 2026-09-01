@@ -19,7 +19,12 @@ def save_config(value):
 
 def request(method, path, payload=None, params=None):
     config = load_config()
-    result = httpx.request(method, config.get("base_url", os.getenv("NODEFLOW_URL", "http://localhost:8000")).rstrip("/") + path, json=payload, params=params, timeout=15).json()
+    base_url = config.get("base_url") or os.getenv("NODEFLOW_API_URL")
+    if not base_url:
+        raise SystemExit("Set NODEFLOW_API_URL or run nodeflow init --url DEPLOYED_NODEFLOW_URL.")
+    token = config.get("access_token") or os.getenv("NODEFLOW_ACCESS_TOKEN")
+    headers = {"Authorization": f"Bearer {token}"} if token else None
+    result = httpx.request(method, base_url.rstrip("/") + path, json=payload, params=params, headers=headers, timeout=15).json()
     if not result["success"]:
         raise SystemExit(result["error"]["message"])
     print(json.dumps(result["data"], indent=2))
@@ -35,7 +40,7 @@ def connected():
 
 parser = argparse.ArgumentParser(prog="nodeflow")
 sub = parser.add_subparsers(dest="command", required=True)
-init = sub.add_parser("init"); init.add_argument("--url", default="http://localhost:8000")
+init = sub.add_parser("init"); init.add_argument("--url", default=os.getenv("NODEFLOW_API_URL")); init.add_argument("--token", default=os.getenv("NODEFLOW_ACCESS_TOKEN"))
 connect = sub.add_parser("connect"); connect.add_argument("--project", required=True); connect.add_argument("--agent", required=True)
 context = sub.add_parser("context"); context.add_argument("--scope", default="related", choices=["my_work", "team", "related", "project"])
 sub.add_parser("status")
@@ -45,7 +50,12 @@ message = sub.add_parser("message"); message.add_argument("--to", required=True)
 
 args = parser.parse_args()
 if args.command == "init":
-    save_config({"base_url": args.url}); print("Initialized .nodeflow.json")
+    if not args.url:
+        raise SystemExit("Provide --url or set NODEFLOW_API_URL.")
+    config = {"base_url": args.url}
+    if args.token:
+        config["access_token"] = args.token
+    save_config(config); print("Initialized .nodeflow.json")
 elif args.command == "connect":
     config = load_config(); config.update(project_id=args.project, agent_id=args.agent); save_config(config); print("Connected existing agent identity")
 else:

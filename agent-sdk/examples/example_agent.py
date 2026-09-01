@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 from nodeflow_sdk import NodeFlowClient
 
-client = NodeFlowClient()
+client = NodeFlowClient()  # Reads NODEFLOW_API_URL and NODEFLOW_ACCESS_TOKEN.
 project_id, agent_id = os.environ["PROJECT_ID"], os.environ["AGENT_ID"]
 print("Context:", client.context(agent_id))
 client.event(project_id, agent_id, "TASK_STARTED", "Agent connected through the NodeFlow SDK")

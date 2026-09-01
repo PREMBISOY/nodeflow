@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, Protocol
 
+import httpx
+
 from app.models import ContextUpdate, Message
 
 
@@ -29,6 +31,18 @@ class AgentTransport(Protocol):
     """Provider-neutral delivery boundary owned by the NodeFlow gateway."""
 
     def deliver(self, envelope: dict[str, Any]) -> None: ...
+
+
+class WebhookAgentTransport:
+    """Posts provider-neutral envelopes to a NodeFlow-managed relay endpoint."""
+
+    def __init__(self, endpoint: str, client: httpx.Client | None = None) -> None:
+        self.endpoint = endpoint
+        self.client = client or httpx.Client(timeout=10)
+
+    def deliver(self, envelope: dict[str, Any]) -> None:
+        response = self.client.post(self.endpoint, json=envelope)
+        response.raise_for_status()
 
 
 class TransportAgentGateway:
