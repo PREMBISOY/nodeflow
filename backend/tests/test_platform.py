@@ -35,3 +35,8 @@ def test_active_team_blocks_cross_tenant_project_agent_and_event_access():
     assert api.get(f"/api/v1/projects/{DEMO_IDS['project']}", headers=auth(team_a_token)).status_code == 200
     assert api.get(f"/api/v1/agents/{DEMO_IDS['frontend_agent']}/updates", headers=auth(team_b_token)).status_code == 404
     assert api.post('/api/v1/events', headers=auth(team_b_token), json={'project_id':str(DEMO_IDS['project']),'event_type':'test','summary':'blocked'}).status_code == 404
+    assert api.get(f"/api/v1/projects/{DEMO_IDS['project']}/context", headers=auth(team_b_token)).status_code == 404
+    assert api.get(f"/api/v1/projects/{DEMO_IDS['project']}/collaboration", headers=auth(team_b_token)).status_code == 404
+    assert api.get(f"/api/v1/projects/{DEMO_IDS['project']}/git/activity", headers=auth(team_b_token)).status_code == 404
+    assert api.post('/api/v1/integrations/github/events', headers=auth(team_b_token), json={'project_id':str(DEMO_IDS['project']),'event_type':'commit','repository':'PREMBISOY/nodeflow','summary':'blocked'}).status_code == 404
+    assert api.post('/api/v1/onboarding', headers=auth(team_b_token), json={'project_id':str(DEMO_IDS['project']),'name':'Test','role':'Engineer'}).status_code == 404

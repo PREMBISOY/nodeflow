@@ -55,6 +55,10 @@ GitHub remains the source of truth for source code. NodeFlow stores a compact ev
 
 Pull-request events may include an `action`. `opened` and `synchronized` default to `review_required` and require approval unless `requires_approval` is explicitly set. A merged PR receives the `merged` flow stage. Read normalized history from `GET /projects/{id}/git/activity`.
 
+## Active team scope
+
+In production, every Project Brain, collaboration, Git, event, onboarding, and agent workflow request is authorized from the session's active team. A caller can access a project only when they are a member of that team and the project belongs to it. Team switching must clear selected project state before requesting a new project context.
+
 ## Approval workflow
 
 `GET /projects/{id}/collaboration` returns `approvals` with a `waiting_approval`, `approved`, or `rejected` status. To make a decision, post an explicit human action:
