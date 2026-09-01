@@ -9,7 +9,7 @@ This repository currently implements the core intelligence subsystem:
 - relevance-scored automatic context propagation
 - agent-to-agent messages recorded in project history
 - role-aware new-member onboarding
-- the specified `/api/v1` contracts and golden demo data
+- Prem-owned `/api/v1` contracts and golden demo data
 
 ## Run locally
 

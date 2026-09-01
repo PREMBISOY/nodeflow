@@ -103,10 +103,3 @@ class ProjectBrain:
             "recent_event_count": len(context.recent_events),
             "recent_change_count": len(context.recent_changes),
         }
-
-    def get_architecture(self, project_id: UUID) -> dict:
-        self.repository.get_project(project_id)
-        return {
-            "components": self.repository.list_components(project_id),
-            "relationships": self.repository.list_relationships(project_id),
-        }

@@ -16,15 +16,21 @@ def test_project_brain_contracts_return_structured_context():
 
     project = client.get(f"/api/v1/projects/{project_id}")
     context = client.get(f"/api/v1/projects/{project_id}/context")
-    state = client.get(f"/api/v1/projects/{project_id}/state")
-    architecture = client.get(f"/api/v1/projects/{project_id}/architecture")
 
     assert project.status_code == 200
     assert project.json()["data"]["name"] == "NodeFlow"
     assert len(context.json()["data"]["components"]) == 4
-    assert state.json()["data"]["active_agent_count"] == 4
-    assert len(architecture.json()["data"]["relationships"]) == 2
-    assert all(response.json()["success"] for response in [project, context, state, architecture])
+    assert len(context.json()["data"]["relationships"]) == 2
+    assert len(context.json()["data"]["agents"]) == 4
+    assert all(response.json()["success"] for response in [project, context])
+
+
+def test_non_owned_feature_routes_are_not_implemented():
+    client = build_client()
+    project_id = DEMO_IDS["project"]
+
+    for suffix in ["state", "architecture", "decisions", "memory"]:
+        assert client.get(f"/api/v1/projects/{project_id}/{suffix}").status_code == 404
 
 
 def test_golden_demo_change_impacts_frontend_and_ml_but_not_marketing():

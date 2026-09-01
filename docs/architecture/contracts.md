@@ -24,7 +24,7 @@ Implement `AgentGateway.publish_context_update` and `AgentGateway.send_message` 
 
 ## Frontend integration (Aarya)
 
-Use `GET /api/v1/projects/{id}/state`, `GET /api/v1/projects/{id}/architecture`, and agent context/update endpoints. All responses use `{success, data, error}`. Dependency relationship direction is `source_component_id depends_on target_component_id`.
+Use `GET /api/v1/projects/{id}/context` and the agent context/update endpoints. All responses use `{success, data, error}`. Dependency relationship direction is `source_component_id depends_on target_component_id`. Dedicated visualization, state-of-the-world, and living-architecture APIs remain with their respective owners.
 
 ## Product workflow integration (Namish)
 
