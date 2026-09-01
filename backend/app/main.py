@@ -12,8 +12,8 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router
 from app.core.container import build_container
-from app.services.agent_gateway import AgentGateway
-from app.services.repository import EntityNotFoundError, ProjectKnowledgeRepository
+from app.services.agent_gateway import AgentGateway, TransportAgentGateway, WebhookAgentTransport
+from app.services.repository import EntityNotFoundError, InMemoryProjectRepository, ProjectKnowledgeRepository
 from app.platform import PlatformStore, SessionCodec, SqlPlatformStore, router as platform_router
 from app.persistence import SqlAlchemyProjectRepository, build_session_factory
 
@@ -25,6 +25,24 @@ def error_response(status_code: int, code: str, message: str) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
         content={"success": False, "data": None, "error": {"code": code, "message": message}},
+    )
+
+
+def gateway_from_environment(repository: ProjectKnowledgeRepository, platform_store) -> AgentGateway | None:
+    """Configure the production relay only when deployment explicitly opts in."""
+    relay_url = os.getenv("AGENT_RELAY_URL")
+    if not relay_url:
+        return None
+    transport = WebhookAgentTransport(
+        relay_url,
+        access_token=os.getenv("AGENT_RELAY_AUTH_TOKEN"),
+        max_attempts=int(os.getenv("AGENT_RELAY_MAX_ATTEMPTS", "3")),
+        retry_delay_seconds=float(os.getenv("AGENT_RELAY_RETRY_DELAY_SECONDS", "0.25")),
+    )
+    return TransportAgentGateway(
+        transport,
+        agent_project=lambda agent_id: repository.get_agent(agent_id).project_id,
+        project_team=platform_store.team_for_project,
     )
 
 
@@ -44,7 +62,8 @@ def create_app(
         session_factory = build_session_factory(database_url)
         repository = SqlAlchemyProjectRepository(session_factory())
         platform_store = SqlPlatformStore(session_factory())
-    container = build_container(repository, gateway)
+    repository = repository or InMemoryProjectRepository()
+    container = build_container(repository, gateway or gateway_from_environment(repository, platform_store))
     # Application startup never inserts showcase data. Test code may inject its
     # isolated fixtures directly into an in-memory repository when needed.
     app.state.container = container

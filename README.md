@@ -33,4 +33,4 @@ The development app starts with deterministic golden-demo data. See [docs/demo.m
 
 ## Agent transport and CLI bridge
 
-The provider-neutral transport adapter and UUID-based local bridge use the existing shared API contracts. See [agent gateway documentation](docs/agent-gateway.md).
+The provider-neutral transport adapter and UUID-based local bridge use the existing shared API contracts. See [agent gateway documentation](docs/agent-gateway.md) and the [CLI setup and demo guide](docs/cli-setup.md).

@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 venv/
 .env
+.nodeflow.json
 .coverage
 htmlcov/
 .idea/

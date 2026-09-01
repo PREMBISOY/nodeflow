@@ -5,13 +5,14 @@ import httpx
 
 
 class NodeFlowClient:
-    def __init__(self, base_url: str | None = None, access_token: str | None = None):
+    def __init__(self, base_url: str | None = None, access_token: str | None = None,
+                 client: httpx.Client | None = None):
         self.base_url = (base_url or os.getenv("NODEFLOW_API_URL") or "").rstrip("/")
         if not self.base_url:
             raise ValueError("Set NODEFLOW_API_URL or pass base_url for the shared NodeFlow deployment.")
         token = access_token or os.getenv("NODEFLOW_ACCESS_TOKEN")
         headers = {"Authorization": f"Bearer {token}"} if token else None
-        self.client = httpx.Client(base_url=self.base_url, timeout=15, headers=headers)
+        self.client = client or httpx.Client(base_url=self.base_url, timeout=15, headers=headers)
 
     def _request(self, method: str, path: str, **kwargs):
         response = self.client.request(method, path, **kwargs)

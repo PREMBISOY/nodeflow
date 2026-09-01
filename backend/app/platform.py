@@ -83,6 +83,9 @@ class PlatformStore:
     def require_project(self, user_id: UUID, team_id: UUID, project_id: UUID) -> None:
         self.require_member(user_id, team_id)
         if self.project_teams.get(project_id) != team_id: raise PermissionError("Project is outside the active team")
+    def team_for_project(self, project_id: UUID) -> UUID:
+        try: return self.project_teams[project_id]
+        except KeyError as exc: raise LookupError("Project is not associated with a team") from exc
     def create_project(self, team_id: UUID, request: ProjectCreateRequest) -> Project:
         project = Project(name=request.name, purpose=request.purpose, technology_stack=request.technology_stack)
         self.projects[project.id] = project; self.project_teams[project.id] = team_id
@@ -139,6 +142,10 @@ class SqlPlatformStore:
         self.require_member(user_id,team_id)
         row=self.session.execute(text("select 1 from projects where id=:project and team_id=:team"), {"project":str(project_id),"team":str(team_id)}).first()
         if not row: raise PermissionError("Project is outside the active team")
+    def team_for_project(self, project_id: UUID) -> UUID:
+        row=self.session.execute(text("select team_id from projects where id=:project"), {"project":str(project_id)}).first()
+        if not row: raise LookupError("Project is not associated with a team")
+        return UUID(str(row.team_id))
     def create_project(self, team_id: UUID, request: ProjectCreateRequest) -> Project:
         project = Project(name=request.name, purpose=request.purpose, technology_stack=request.technology_stack)
         self.session.execute(text("insert into projects (id,name,purpose,technology_stack,status,created_at,team_id) values (:id,:name,:purpose,:stack,:status,:created,:team)"), {"id":str(project.id),"name":project.name,"purpose":project.purpose,"stack":json.dumps(project.technology_stack),"status":project.status,"created":project.created_at,"team":str(team_id)})

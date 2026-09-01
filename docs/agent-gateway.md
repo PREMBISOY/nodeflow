@@ -32,3 +32,30 @@ The SDK and CLI send `Authorization: Bearer <token>` only when `NODEFLOW_ACCESS_
 ## Deployment injection
 
 `create_app(gateway=TransportAgentGateway(transport))` injects the adapter without replacing the application bootstrap. `transport` may be an object implementing `deliver(envelope)` or a callable receiving the same generic envelope. `WebhookAgentTransport(endpoint)` is available for a NodeFlow-managed relay endpoint. The default remains the in-memory recorder used by the existing test/demo setup.
+
+## Railway relay configuration
+
+Set these Railway service variables to enable production delivery:
+
+| Variable | Purpose |
+| --- | --- |
+| `AGENT_RELAY_URL` | NodeFlow-managed relay delivery endpoint. Enables the webhook transport. |
+| `AGENT_RELAY_AUTH_TOKEN` | Optional bearer credential presented to the relay. |
+| `AGENT_RELAY_MAX_ATTEMPTS` | Delivery attempts, default `3`. |
+| `AGENT_RELAY_RETRY_DELAY_SECONDS` | Linear retry base delay, default `0.25`. |
+
+For every delivery, the gateway resolves the recipient agent's project from the repository and rejects mismatches. It derives `team_id` from Aayush's authoritative project-to-team mapping and includes both `project_id` and `team_id` in the relay envelope. The relay must treat this scope as mandatory and must not route an envelope outside it. Failed attempts are logged as `agent_relay_delivery_retry` or `agent_relay_delivery_failed`; the webhook transport also exposes in-process `metrics` (`attempted`, `delivered`, `failed`, `retried`) for deployment monitoring.
+
+## Railway authenticated smoke check
+
+With a real platform-issued token scoped to the intended active team, run:
+
+```powershell
+$env:NODEFLOW_API_URL = "https://<your-railway-domain>"
+$env:NODEFLOW_ACCESS_TOKEN = "<active-team-token>"
+python cli/nodeflow.py init
+python cli/nodeflow.py connect --project PROJECT_UUID --agent AGENT_UUID
+python cli/nodeflow.py status
+```
+
+The equivalent SDK call is `NodeFlowClient().updates("AGENT_UUID")`. A `200` response verifies the deployed URL and bearer-token forwarding. A `404` for an agent/project from a different active team is the expected tenant-isolation result.
