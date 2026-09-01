@@ -48,3 +48,18 @@ Use `POST /api/v1/onboarding` with `role` and `scope`, and `POST /api/v1/agents/
 - Graph traversal is bidirectional to capture both dependencies and dependents, with a maximum impact distance of two.
 - The external gateway provides retries and transport guarantees.
 - A multi-component event produces one impact result per directly changed component and at most one consolidated update per relevant agent.
+
+## Outbox integration (Aayush)
+
+`OutboxRepository` provides transaction-safe messaging. Changes destined for `AgentGateway` should be persisted as `outbox_events` in the same database transaction as the business logic, and later delivered asynchronously.
+
+## Approval persistence (Aayush)
+
+`ApprovalService` persists `ApprovalRequest` and `ApprovalDecision` records, with a strict database UNIQUE constraint on `approval_decisions.approval_request_id` to prevent concurrent approval/rejection race conditions.
+
+## GitHub Integration (Aayush)
+
+Webhooks are mapped securely using connection-specific secrets:
+- New webhook endpoint: `/api/v1/integrations/github/webhook/{connection_id}`
+- X-GitHub-Delivery idempotency tracking prevents duplicate ingestion of the same payload.
+

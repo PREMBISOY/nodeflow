@@ -191,7 +191,9 @@ class SqlAlchemyProjectRepository:
     def _add(self, entity: ModelT, row_type: type[Any], model: type[ModelT]) -> ModelT:
         row = row_type(**self._data(entity))
         self.session.add(row)
-        self.session.commit()
+        # flush() detects constraint violations without committing; the
+        # request-scoped unit-of-work middleware owns the final commit.
+        self.session.flush()
         self.session.refresh(row)
         return self._entity(row, model)
 
@@ -234,7 +236,7 @@ class SqlAlchemyProjectRepository:
         self.session.flush()
         for relationship in relationships:
             self.session.merge(RelationshipRow(**self._data(relationship)))
-        self.session.commit()
+        self.session.flush()
     def has_github_commit(self, project_id: UUID, repository: str, commit_sha: str) -> bool:
         events = self.session.scalars(select(EventRow).where(EventRow.project_id == project_id, EventRow.event_type == "github_commit"))
         return any(event.payload.get("repository", "").casefold() == repository.casefold() and event.payload.get("commit_sha") == commit_sha for event in events)
@@ -264,4 +266,4 @@ class SqlAlchemyProjectRepository:
                     break
             else:
                 raise TypeError(f"Unsupported seed entity: {type(entity)!r}")
-        self.session.commit()
+        self.session.flush()
