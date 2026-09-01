@@ -37,6 +37,7 @@ class ComponentContext(BaseModel):
 class ImpactAnalysisResult(BaseModel):
     change: Change
     affected_components: list[Component]
+    affected_component_distances: dict[UUID, int] = Field(default_factory=dict)
     affected_agents: list[Agent]
     affected_tasks: list[Task]
     relevant_roles: list[str]

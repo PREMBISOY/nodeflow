@@ -20,6 +20,8 @@ class OnboardingService:
         if not role_terms:
             role_terms = {token.lower() for token in request.role.split()}
         agent = self.repository.get_agent(request.agent_id) if request.agent_id else None
+        if agent and agent.project_id != request.project_id:
+            raise ValueError("Onboarding agent does not belong to the requested project")
         relevant_component_ids = set(agent.component_ids) if agent else {
             component.id
             for component in context.components

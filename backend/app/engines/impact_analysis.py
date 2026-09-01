@@ -13,6 +13,8 @@ class ChangeImpactAnalyzer:
     def analyze(self, change: Change) -> ImpactAnalysisResult:
         project_id = change.project_id
         changed_component = self.repository.get_component(change.component_id)
+        if changed_component.project_id != project_id:
+            raise ValueError("Changed component does not belong to the event project")
         components = {item.id: item for item in self.repository.list_components(project_id)}
         relationships = self.repository.list_relationships(project_id)
         distances = DependencyGraph(relationships).related(change.component_id, max_depth=2)
@@ -51,6 +53,7 @@ class ChangeImpactAnalyzer:
         return ImpactAnalysisResult(
             change=change,
             affected_components=affected_components,
+            affected_component_distances=distances,
             affected_agents=affected_agents,
             affected_tasks=affected_tasks,
             relevant_roles=sorted({agent.role for agent in affected_agents}),

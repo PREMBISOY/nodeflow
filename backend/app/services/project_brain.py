@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from uuid import UUID
 
 from app.engines.dependency_graph import DependencyGraph
@@ -78,16 +79,27 @@ class ProjectBrain:
         ]
 
     def get_relevant_memory(self, project_id: UUID, query: str):
-        tokens = {token.lower() for token in query.split() if len(token) > 2}
+        tokens = self._tokens(query)
         memories = self.repository.list_memories(project_id)
         if not tokens:
             return memories
-        return [
-            item
-            for item in memories
-            if tokens.intersection({token.strip(".,:;!?()").lower() for token in item.content.split()})
-            or tokens.intersection({tag.lower() for tag in item.tags})
-        ]
+        ranked = []
+        for memory in memories:
+            terms = self._tokens(memory.content) | {
+                token for tag in memory.tags for token in self._tokens(tag)
+            }
+            score = sum(
+                1
+                for query_token in tokens
+                if any(term.startswith(query_token) or query_token.startswith(term) for term in terms)
+            )
+            if score:
+                ranked.append((score, memory.created_at, memory))
+        return [memory for _, _, memory in sorted(ranked, key=lambda item: item[:2], reverse=True)]
+
+    @staticmethod
+    def _tokens(value: str) -> set[str]:
+        return {token for token in re.findall(r"[a-z0-9]+", value.lower()) if len(token) > 2}
 
     def get_project_state(self, project_id: UUID) -> dict:
         context = self.get_project_context(project_id)

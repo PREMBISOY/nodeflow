@@ -30,6 +30,8 @@ All handled failures are:
 
 Event ingestion accepts an optional nested `change`. When present, NodeFlow analyzes the graph and propagates only to agents whose deterministic relevance score meets the threshold.
 
+Impact responses include `affected_component_distances`, where each UUID maps to its dependency-hop distance from the changed component. Propagated updates include a rounded `relevance_score` from `0.00` to `1.00` and a human-readable explanation of why the recipient needs the change.
+
 `task_id` is optional. When supplied, its components are added to the assembled context and the selected task is returned as `requested_task`. This supports an agent beginning a newly assigned task without exposing an unrelated project-wide context.
 
 Standalone state-of-the-world, living-architecture, decision-memory, and project-memory routes are intentionally not implemented here because those features are outside Prem's ownership. Their data may still be consumed through the Project Brain repository boundary when needed for Prem-owned reasoning and onboarding.

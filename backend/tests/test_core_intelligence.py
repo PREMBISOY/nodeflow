@@ -58,6 +58,10 @@ def test_golden_demo_change_impacts_frontend_and_ml_but_not_marketing():
     assert body["success"] is True
     impact = body["data"]["impact"]
     assert {item["name"] for item in impact["affected_components"]} == {"Frontend", "ML Service"}
+    assert impact["affected_component_distances"] == {
+        str(DEMO_IDS["frontend"]): 1,
+        str(DEMO_IDS["ml"]): 1,
+    }
     assert impact["impact_level"] == "medium"
     assert set(body["data"]["propagated_to"]) == {
         str(DEMO_IDS["frontend_agent"]),
@@ -71,6 +75,18 @@ def test_golden_demo_change_impacts_frontend_and_ml_but_not_marketing():
     assert len(ml_updates) == 1
     assert marketing_updates == []
     assert "Added GET /recommendations" in frontend_updates[0]["content"]
+    assert frontend_updates[0]["relevance_score"] == 0.95
+
+
+def test_project_brain_memory_search_ranks_normalized_partial_matches():
+    client = build_client()
+    brain = client.app.state.container.brain
+
+    results = brain.get_relevant_memory(DEMO_IDS["project"], "recommendation")
+
+    assert [memory.content for memory in results] == [
+        "The recommendations flow connects Frontend to Recommendations API to ML Service."
+    ]
 
 
 def test_related_context_includes_dependency_but_excludes_marketing():
