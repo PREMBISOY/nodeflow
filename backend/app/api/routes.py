@@ -36,9 +36,8 @@ def get_agent_context(
     agent_id: UUID,
     request: Request,
     scope: Literal["my_work", "team", "related", "project"] = Query(default="related"),
-    task_id: UUID | None = Query(default=None),
 ):
-    return success(services(request).context.get_agent_context(agent_id, scope, task_id))
+    return success(services(request).context.get_agent_context(agent_id, scope))
 
 
 @router.get("/agents/{agent_id}/updates")

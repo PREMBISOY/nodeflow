@@ -16,6 +16,7 @@ class GitIntelligenceService:
         component_ids = self._map_files(
             self.repository.list_components(request.project_id), request.changed_files
         )
+        actor_id = self._resolve_actor(request.project_id, request.actor_name, component_ids)
         payload = {
             "provider": "github", "repository": request.repository, "ref": request.ref,
             "commit_sha": request.commit_sha, "pull_request_number": request.pull_request_number,
@@ -25,10 +26,12 @@ class GitIntelligenceService:
         if not component_ids:
             return self.events.process(EventCreate(
                 project_id=request.project_id, event_type=f"github_{request.event_type}",
+                actor_type="agent" if actor_id else "system", actor_id=actor_id,
                 summary=request.summary, payload=payload,
             ))
         return self.events.process(EventCreate(
             project_id=request.project_id, event_type=f"github_{request.event_type}",
+            actor_type="agent" if actor_id else "system", actor_id=actor_id,
             component_ids=component_ids, summary=request.summary, payload=payload,
             change={"component_id": component_ids[0], "summary": request.summary,
                     "change_type": request.event_type, "source_ref": request.commit_sha or request.ref},
@@ -44,3 +47,15 @@ class GitIntelligenceService:
                    for prefix in prefixes for path in changed_files):
                 matched.append(component.id)
         return matched
+
+    def _resolve_actor(self, project_id, actor_name: str | None, component_ids):
+        agents = self.repository.list_agents(project_id)
+        if actor_name:
+            normalized = actor_name.casefold()
+            match = next((agent for agent in agents if normalized in agent.name.casefold()), None)
+            if match:
+                return match.id
+        return next(
+            (agent.id for agent in agents if set(agent.component_ids).intersection(component_ids)),
+            None,
+        )

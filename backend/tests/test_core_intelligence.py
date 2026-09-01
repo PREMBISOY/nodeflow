@@ -83,21 +83,6 @@ def test_related_context_includes_dependency_but_excludes_marketing():
     assert names == {"Frontend", "Recommendations API"}
 
 
-def test_task_aware_context_assembles_the_selected_task_with_related_architecture():
-    client = build_client()
-    response = client.get(
-        f"/api/v1/agents/{DEMO_IDS['frontend_agent']}/context",
-        params={"scope": "my_work", "task_id": str(DEMO_IDS["frontend_task"])},
-    )
-
-    assert response.status_code == 200
-    context = response.json()["data"]
-    assert context["requested_task"]["title"] == "Integrate recommendations UI"
-    assert {component["name"] for component in context["components"]} == {
-        "Frontend", "Recommendations API"
-    }
-
-
 def test_agent_message_is_delivered_and_recorded_as_project_history():
     client = build_client()
     before_events = client.get(

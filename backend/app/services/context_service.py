@@ -13,9 +13,7 @@ class ContextService:
         self.repository = repository
         self.brain = brain
 
-    def get_agent_context(
-        self, agent_id: UUID, scope: ContextScope = "related", task_id: UUID | None = None
-    ) -> dict:
+    def get_agent_context(self, agent_id: UUID, scope: ContextScope = "related") -> dict:
         agent = self.repository.get_agent(agent_id)
         project_id = agent.project_id
         all_tasks = self.repository.list_tasks(project_id)
@@ -40,14 +38,6 @@ class ContextService:
                 component_ids.update(graph.related(component_id, max_depth=1))
             tasks = [task for task in all_tasks if component_ids.intersection(task.component_ids)]
 
-        requested_task = None
-        if task_id:
-            requested_task = next((task for task in all_tasks if task.id == task_id), None)
-            if requested_task is None:
-                raise LookupError("Task does not belong to the agent's project")
-            component_ids.update(requested_task.component_ids)
-            tasks = [requested_task, *(task for task in tasks if task.id != task_id)]
-
         components = [
             item for item in self.repository.list_components(project_id) if item.id in component_ids
         ]
@@ -65,7 +55,6 @@ class ContextService:
         return {
             "agent": agent,
             "scope": scope,
-            "requested_task": requested_task,
             "project": self.repository.get_project(project_id),
             "components": components,
             "tasks": tasks,
