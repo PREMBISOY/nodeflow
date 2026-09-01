@@ -37,7 +37,7 @@ class RelevanceEngine:
             score += 0.10
             reasons.append("agent role is relevant to the impact")
 
-        if event.event_type.startswith(("api_", "github_", "component_")) and reasons:
+        if event.event_type.casefold().startswith(("api_", "github_", "component_")) and reasons:
             score += 0.05
             reasons.append("event type represents a source-code or contract change")
 

@@ -38,6 +38,7 @@ class ProjectBrain:
             for item in relationships
             if component_id in (item.source_component_id, item.target_component_id)
         ]
+        scoped_component_ids = {component_id, *related_ids}
         return ComponentContext(
             component=component,
             relationships=related_relationships,
@@ -45,10 +46,14 @@ class ProjectBrain:
                 item for item in self.repository.list_components(project_id) if item.id in related_ids
             ],
             tasks=[
-                item for item in self.repository.list_tasks(project_id) if component_id in item.component_ids
+                item
+                for item in self.repository.list_tasks(project_id)
+                if scoped_component_ids.intersection(item.component_ids)
             ],
             agents=[
-                item for item in self.repository.list_agents(project_id) if component_id in item.component_ids
+                item
+                for item in self.repository.list_agents(project_id)
+                if scoped_component_ids.intersection(item.component_ids)
             ],
             decisions=self.get_relevant_decisions(project_id, [component_id, *related_ids]),
             memories=[
@@ -79,6 +84,7 @@ class ProjectBrain:
         ]
 
     def get_relevant_memory(self, project_id: UUID, query: str):
+        self.repository.get_project(project_id)
         tokens = self._tokens(query)
         memories = self.repository.list_memories(project_id)
         if not tokens:
@@ -114,4 +120,19 @@ class ProjectBrain:
             },
             "recent_event_count": len(context.recent_events),
             "recent_change_count": len(context.recent_changes),
+            "latest_event_at": (
+                context.recent_events[0].created_at if context.recent_events else None
+            ),
         }
+
+    def get_architecture(self, project_id: UUID) -> dict:
+        self.repository.get_project(project_id)
+        components = self.repository.list_components(project_id)
+        component_ids = {component.id for component in components}
+        relationships = [
+            relationship
+            for relationship in self.repository.list_relationships(project_id)
+            if relationship.source_component_id in component_ids
+            and relationship.target_component_id in component_ids
+        ]
+        return {"components": components, "relationships": relationships}

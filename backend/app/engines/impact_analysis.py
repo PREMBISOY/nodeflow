@@ -19,24 +19,30 @@ class ChangeImpactAnalyzer:
         relationships = self.repository.list_relationships(project_id)
         distances = DependencyGraph(relationships).related(change.component_id, max_depth=2)
         affected_ids = set(distances)
-        affected_components = [components[item_id] for item_id in affected_ids if item_id in components]
+        affected_components = sorted(
+            (components[item_id] for item_id in affected_ids if item_id in components),
+            key=lambda item: (distances[item.id], item.name.casefold(), str(item.id)),
+        )
         relevant_component_ids = affected_ids | {change.component_id}
 
-        affected_tasks = [
+        inactive_statuses = {"done", "completed", "cancelled", "canceled", "archived"}
+        affected_tasks = sorted([
             task
             for task in self.repository.list_tasks(project_id)
             if relevant_component_ids.intersection(task.component_ids)
-        ]
+            and task.status.casefold() not in inactive_statuses
+        ], key=lambda item: (item.title.casefold(), str(item.id)))
         task_ids = {task.id for task in affected_tasks}
-        affected_agents = [
+        affected_agents = sorted([
             agent
             for agent in self.repository.list_agents(project_id)
             if agent.active
             and (
                 relevant_component_ids.intersection(agent.component_ids)
                 or task_ids.intersection(agent.current_task_ids)
+                or any(agent.id in task.assignee_agent_ids for task in affected_tasks)
             )
-        ]
+        ], key=lambda item: (item.name.casefold(), str(item.id)))
 
         reasoning = [f"Change originated in component '{changed_component.name}'."]
         for component in sorted(affected_components, key=lambda item: (distances[item.id], item.name)):

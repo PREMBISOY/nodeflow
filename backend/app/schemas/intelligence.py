@@ -47,26 +47,28 @@ class ImpactAnalysisResult(BaseModel):
 
 class EventCreate(BaseModel):
     project_id: UUID
-    event_type: str
+    event_type: str = Field(min_length=1, max_length=100)
     actor_type: Literal["human", "agent", "system"] = "system"
     actor_id: UUID | None = None
     entity_id: UUID | None = None
-    component_ids: list[UUID] = Field(default_factory=list)
-    summary: str
+    component_ids: list[UUID] = Field(default_factory=list, max_length=100)
+    summary: str = Field(min_length=1, max_length=2_000)
     payload: dict[str, Any] = Field(default_factory=dict)
     change: "ChangeCreate | None" = None
+    changes: list["ChangeCreate"] = Field(default_factory=list, max_length=50)
 
 
 class ChangeCreate(BaseModel):
     component_id: UUID
-    summary: str
-    change_type: str = "modified"
-    source_ref: str | None = None
+    summary: str = Field(min_length=1, max_length=2_000)
+    change_type: str = Field(default="modified", min_length=1, max_length=60)
+    source_ref: str | None = Field(default=None, max_length=2_000)
 
 
 class EventProcessingResult(BaseModel):
     event: Event
     impact: ImpactAnalysisResult | None
+    impacts: list[ImpactAnalysisResult] = Field(default_factory=list)
     propagated_to: list[UUID]
 
 
@@ -76,13 +78,13 @@ class GitHubEventCreate(BaseModel):
     project_id: UUID
     event_type: Literal["commit", "pull_request", "branch"]
     action: Literal["created", "updated", "opened", "synchronized", "merged", "closed"] | None = None
-    repository: str
-    summary: str
-    changed_files: list[str] = Field(default_factory=list)
-    ref: str | None = None
-    commit_sha: str | None = None
+    repository: str = Field(min_length=3, max_length=300)
+    summary: str = Field(min_length=1, max_length=2_000)
+    changed_files: list[str] = Field(default_factory=list, max_length=5_000)
+    ref: str | None = Field(default=None, max_length=1_000)
+    commit_sha: str | None = Field(default=None, max_length=100)
     pull_request_number: int | None = None
-    actor_name: str | None = None
+    actor_name: str | None = Field(default=None, max_length=200)
     requires_approval: bool | None = None
 
 
@@ -95,19 +97,19 @@ class ApprovalDecisionCreate(BaseModel):
 
 class MessageCreate(BaseModel):
     recipient_agent_id: UUID
-    message_type: str = "context_update"
-    subject: str
-    content: str
-    related_components: list[UUID] = Field(default_factory=list)
+    message_type: str = Field(default="context_update", min_length=1, max_length=80)
+    subject: str = Field(min_length=1, max_length=300)
+    content: str = Field(min_length=1, max_length=20_000)
+    related_components: list[UUID] = Field(default_factory=list, max_length=100)
 
 
 class OnboardingRequest(BaseModel):
     project_id: UUID
-    name: str
-    role: str
+    name: str = Field(min_length=1, max_length=200)
+    role: str = Field(min_length=1, max_length=100)
     agent_id: UUID | None = None
     scope: ContextScope = "related"
-    question: str = "Explain this project to me."
+    question: str = Field(default="Explain this project to me.", min_length=1, max_length=2_000)
 
 
 class OnboardingPackage(BaseModel):
@@ -119,6 +121,7 @@ class OnboardingPackage(BaseModel):
     current_state: dict[str, Any]
     relevant_tasks: list[Task]
     important_decisions: list[Decision]
+    relevant_memories: list[Memory]
     recent_changes: list[Change]
     role_specific_information: list[str]
     recommended_starting_points: list[str]

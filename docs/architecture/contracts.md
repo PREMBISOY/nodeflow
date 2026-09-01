@@ -18,6 +18,8 @@ Implement the protocol in `backend/app/services/repository.py`. Database entitie
 
 The repository must provide structured project, component, relationship, task, agent, event, decision, memory, change, message, and context-update reads/writes. The bundled `InMemoryProjectRepository` is for the demo and tests only.
 
+Prem's orchestration validates agent and component ownership before it writes an event, change, or message. Aayush's persistent adapter must still enforce the same invariants with tenant-aware constraints and transactions; service validation is not a database isolation substitute.
+
 ## Agent gateway integration (Sunal)
 
 Implement `AgentGateway.publish_context_update` and `AgentGateway.send_message` in `backend/app/services/agent_gateway.py`, then inject that implementation into the container. Publishing is deliberately separate from persistence: updates/messages are recorded first and delivered second.
@@ -25,6 +27,8 @@ Implement `AgentGateway.publish_context_update` and `AgentGateway.send_message` 
 ## Frontend integration (Aarya)
 
 Use `GET /api/v1/projects/{id}/context` and the agent context/update endpoints. All responses use `{success, data, error}`. Dependency relationship direction is `source_component_id depends_on target_component_id`. Dedicated visualization, state-of-the-world, and living-architecture APIs remain with their respective owners.
+
+Read-only Project Brain views are available for state, architecture, component context, decisions, and memory. Ownership of their mutation APIs and persistence remains unchanged.
 
 ## Product workflow integration (Namish)
 
@@ -36,3 +40,4 @@ Use `POST /api/v1/onboarding` with `role` and `scope`, and `POST /api/v1/agents/
 - An agent's `component_ids` and `current_task_ids` are current and authoritative.
 - Graph traversal is bidirectional to capture both dependencies and dependents, with a maximum impact distance of two.
 - The external gateway provides retries and transport guarantees.
+- A multi-component event produces one impact result per directly changed component and at most one consolidated update per relevant agent.

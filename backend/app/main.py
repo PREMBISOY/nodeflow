@@ -3,13 +3,17 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import scoped_session
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.routes import router
 from app.core.container import build_container
@@ -21,6 +25,7 @@ from app.persistence import SqlAlchemyProjectRepository, build_session_factory
 
 
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 def error_response(status_code: int, code: str, message: str) -> JSONResponse:
@@ -28,6 +33,15 @@ def error_response(status_code: int, code: str, message: str) -> JSONResponse:
         status_code=status_code,
         content={"success": False, "data": None, "error": {"code": code, "message": message}},
     )
+
+
+def resolve_frontend_file(frontend_dir: Path, requested_path: str) -> Path | None:
+    """Resolve an asset without allowing it to escape the built frontend root."""
+    root = frontend_dir.resolve()
+    candidate = (root / requested_path).resolve()
+    if candidate != root and root not in candidate.parents:
+        return None
+    return candidate if candidate.is_file() else None
 
 
 def create_app(
@@ -42,6 +56,7 @@ def create_app(
     )
     database_url = os.getenv("DATABASE_URL")
     platform_store = PlatformStore()
+    session_factory = None
     if repository is None and database_url:
         session_factory = build_session_factory(database_url)
         # FastAPI can execute synchronous endpoints concurrently. A plain
@@ -51,6 +66,7 @@ def create_app(
         repository = SqlAlchemyProjectRepository(sessions)
         platform_store = SqlPlatformStore(sessions)
         app.state.database_sessions = sessions
+    app.state.database_session_factory = session_factory
     container = build_container(repository, gateway)
     if load_demo_data and isinstance(container.repository, InMemoryProjectRepository):
         seed_demo(container.repository)
@@ -59,7 +75,14 @@ def create_app(
     app.state.session_codec = SessionCodec()
     app.state.enforce_tenants = bool(database_url)
     origins = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",") if origin.strip()]
-    app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["GET", "POST", "OPTIONS"], allow_headers=["Authorization", "Content-Type"])
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+        expose_headers=["X-Request-ID"],
+    )
     app.include_router(router)
     app.include_router(platform_router)
 
@@ -72,9 +95,40 @@ def create_app(
             if sessions is not None:
                 sessions.remove()
 
+    @app.middleware("http")
+    async def attach_request_id(request: Request, call_next):
+        supplied = request.headers.get("X-Request-ID", "").strip()
+        request_id = supplied[:128] if supplied else str(uuid4())
+        request.state.request_id = request_id
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
+
+    @app.get("/health/live")
+    def liveness():
+        return {"success": True, "data": {"status": "alive"}, "error": None}
+
     @app.get("/health")
-    def health():
-        return {"success": True, "data": {"status": "ok"}, "error": None}
+    @app.get("/health/ready")
+    def readiness(request: Request):
+        factory = request.app.state.database_session_factory
+        if factory is None:
+            return {
+                "success": True,
+                "data": {"status": "ready", "database": "in-memory"},
+                "error": None,
+            }
+        try:
+            with factory() as session:
+                session.execute(text("SELECT 1"))
+        except SQLAlchemyError:
+            logger.exception("Database readiness check failed")
+            return error_response(503, "DATABASE_UNAVAILABLE", "Database is not ready")
+        return {
+            "success": True,
+            "data": {"status": "ready", "database": "connected"},
+            "error": None,
+        }
 
     frontend_dir = Path(__file__).resolve().parent / "static"
     if frontend_dir.is_dir():
@@ -82,8 +136,10 @@ def create_app(
 
         @app.get("/{path:path}", include_in_schema=False)
         def frontend(path: str):
-            requested_file = frontend_dir / path
-            if path and requested_file.is_file():
+            if path.startswith("api/"):
+                return error_response(404, "NOT_FOUND", "API route was not found")
+            requested_file = resolve_frontend_file(frontend_dir, path) if path else None
+            if requested_file is not None:
                 return FileResponse(requested_file)
             return FileResponse(frontend_dir / "index.html")
 
@@ -93,8 +149,25 @@ def create_app(
 
     @app.exception_handler(RequestValidationError)
     async def validation_handler(_request: Request, exc: RequestValidationError):
-        message = "; ".join(error["msg"] for error in exc.errors())
+        message = "; ".join(
+            f"{'.'.join(str(part) for part in error['loc'] if part != 'body')}: {error['msg']}"
+            for error in exc.errors()
+        )
         return error_response(422, "VALIDATION_ERROR", message)
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_error_handler(_request: Request, exc: StarletteHTTPException):
+        codes = {
+            400: "INVALID_REQUEST",
+            401: "AUTHENTICATION_REQUIRED",
+            403: "FORBIDDEN",
+            404: "NOT_FOUND",
+            409: "CONFLICT",
+            422: "VALIDATION_ERROR",
+            503: "SERVICE_UNAVAILABLE",
+        }
+        message = exc.detail if isinstance(exc.detail, str) else "Request failed"
+        return error_response(exc.status_code, codes.get(exc.status_code, "HTTP_ERROR"), message)
 
     @app.exception_handler(ValueError)
     async def value_error_handler(_request: Request, exc: ValueError):
@@ -103,6 +176,22 @@ def create_app(
     @app.exception_handler(LookupError)
     async def lookup_error_handler(_request: Request, exc: LookupError):
         return error_response(404, "NOT_FOUND", str(exc))
+
+    @app.exception_handler(PermissionError)
+    async def permission_error_handler(_request: Request, exc: PermissionError):
+        return error_response(403, "FORBIDDEN", str(exc))
+
+    @app.exception_handler(Exception)
+    async def unexpected_error_handler(request: Request, exc: Exception):
+        logger.error(
+            "Unhandled request failure request_id=%s path=%s",
+            getattr(request.state, "request_id", "unknown"),
+            request.url.path,
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
+        response = error_response(500, "INTERNAL_ERROR", "An unexpected error occurred")
+        response.headers["X-Request-ID"] = getattr(request.state, "request_id", "unknown")
+        return response
 
     return app
 

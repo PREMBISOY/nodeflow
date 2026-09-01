@@ -35,32 +35,62 @@ class GitIntelligenceService:
             project_id=request.project_id, event_type=f"github_{request.event_type}",
             actor_type="agent" if actor_id else "system", actor_id=actor_id,
             component_ids=component_ids, summary=request.summary, payload=payload,
-            change={"component_id": component_ids[0], "summary": request.summary,
-                    "change_type": request.event_type, "source_ref": request.commit_sha or request.ref},
+            changes=[
+                {
+                    "component_id": component_id,
+                    "summary": request.summary,
+                    "change_type": request.event_type,
+                    "source_ref": request.commit_sha or request.ref,
+                }
+                for component_id in component_ids
+            ],
         ))
 
     @staticmethod
     def _map_files(components, changed_files: list[str]):
         matched = []
-        for component in components:
-            prefixes = [tag.removeprefix("path:").strip("/") for tag in component.tags
-                        if tag.startswith("path:")]
-            if any(path == prefix or path.startswith(f"{prefix}/")
-                   for prefix in prefixes for path in changed_files):
-                matched.append(component.id)
+        for path in changed_files:
+            normalized_path = path.strip("/")
+            for component in components:
+                prefixes = [
+                    tag.removeprefix("path:").strip("/")
+                    for tag in component.tags
+                    if tag.startswith("path:")
+                ]
+                if component.id not in matched and any(
+                    normalized_path == prefix or normalized_path.startswith(f"{prefix}/")
+                    for prefix in prefixes
+                ):
+                    matched.append(component.id)
         return matched
 
     def _resolve_actor(self, project_id, actor_name: str | None, component_ids):
         agents = self.repository.list_agents(project_id)
         if actor_name:
-            normalized = actor_name.casefold()
-            match = next((agent for agent in agents if normalized in agent.name.casefold()), None)
+            normalized = actor_name.strip().casefold()
+            match = next(
+                (
+                    agent
+                    for agent in agents
+                    if normalized in self._agent_name_aliases(agent.name)
+                ),
+                None,
+            )
             if match:
                 return match.id
         return next(
             (agent.id for agent in agents if set(agent.component_ids).intersection(component_ids)),
             None,
         )
+
+    @staticmethod
+    def _agent_name_aliases(name: str) -> set[str]:
+        normalized = name.strip().casefold()
+        aliases = {normalized}
+        for suffix in ("'s agent", "’s agent", " agent"):
+            if normalized.endswith(suffix):
+                aliases.add(normalized.removesuffix(suffix).strip())
+        return aliases
 
     def get_activity(self, project_id):
         self.repository.get_project(project_id)
