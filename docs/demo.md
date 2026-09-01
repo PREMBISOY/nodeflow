@@ -1,7 +1,8 @@
 # Golden Demo
 
-This is a test-only fixture stored in `backend/tests/fixtures/demo_data.py`.
-The development and production servers start empty and never load it.
+The development server loads the stable demo data from
+`backend/app/core/demo_data.py`. The matching test fixture is kept under
+`backend/tests/fixtures/`.
 
 - Project: `10000000-0000-0000-0000-000000000001`
 - Recommendations API: `20000000-0000-0000-0000-000000000002`

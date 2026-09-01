@@ -12,8 +12,9 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router
 from app.core.container import build_container
+from app.core.demo_data import seed_demo
 from app.services.agent_gateway import AgentGateway
-from app.services.repository import EntityNotFoundError, ProjectKnowledgeRepository
+from app.services.repository import EntityNotFoundError, InMemoryProjectRepository, ProjectKnowledgeRepository
 from app.platform import PlatformStore, SessionCodec, SqlPlatformStore, router as platform_router
 from app.persistence import SqlAlchemyProjectRepository, build_session_factory
 
@@ -31,7 +32,7 @@ def error_response(status_code: int, code: str, message: str) -> JSONResponse:
 def create_app(
     repository: ProjectKnowledgeRepository | None = None,
     gateway: AgentGateway | None = None,
-    load_demo_data: bool = False,
+    load_demo_data: bool = True,
 ) -> FastAPI:
     app = FastAPI(
         title="NodeFlow Core Intelligence API",
@@ -45,8 +46,8 @@ def create_app(
         repository = SqlAlchemyProjectRepository(session_factory())
         platform_store = SqlPlatformStore(session_factory())
     container = build_container(repository, gateway)
-    # Application startup never inserts showcase data. Test code may inject its
-    # isolated fixtures directly into an in-memory repository when needed.
+    if load_demo_data and isinstance(container.repository, InMemoryProjectRepository):
+        seed_demo(container.repository)
     app.state.container = container
     app.state.platform_store = platform_store
     app.state.session_codec = SessionCodec()

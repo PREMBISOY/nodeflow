@@ -2,14 +2,12 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from tests.fixtures.demo_data import DEMO_IDS, seed_demo
+from tests.fixtures.demo_data import DEMO_IDS
 from app.main import create_app
 
 
 def build_client() -> TestClient:
-    app = create_app()
-    seed_demo(app.state.container.repository)
-    return TestClient(app)
+    return TestClient(create_app())
 
 
 def test_project_brain_contracts_return_structured_context():
