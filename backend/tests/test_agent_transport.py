@@ -1,10 +1,16 @@
 from uuid import uuid4
 
 from app.models import ContextUpdate, Message
-from app.core.demo_data import DEMO_IDS
+from tests.fixtures.demo_data import DEMO_IDS, seed_demo
 from app.main import create_app
 from app.services.agent_gateway import TransportAgentGateway, WebhookAgentTransport
 from fastapi.testclient import TestClient
+
+
+def seeded_client(gateway):
+    app = create_app(gateway=gateway)
+    seed_demo(app.state.container.repository)
+    return TestClient(app)
 
 
 def test_transport_gateway_emits_provider_neutral_envelopes():
@@ -19,7 +25,7 @@ def test_transport_gateway_emits_provider_neutral_envelopes():
 
 def test_transport_adapter_can_be_injected_into_the_application():
     received = []
-    client = TestClient(create_app(gateway=TransportAgentGateway(received.append)))
+    client = seeded_client(TransportAgentGateway(received.append))
     response = client.post(f"/api/v1/agents/{DEMO_IDS['frontend_agent']}/messages", json={
         "recipient_agent_id": str(DEMO_IDS["backend_agent"]),
         "message_type": "acknowledgement",
@@ -33,7 +39,7 @@ def test_transport_adapter_can_be_injected_into_the_application():
 
 def test_impact_propagation_reaches_the_injected_transport():
     received = []
-    client = TestClient(create_app(gateway=TransportAgentGateway(received.append)))
+    client = seeded_client(TransportAgentGateway(received.append))
     response = client.post("/api/v1/events", json={
         "project_id": str(DEMO_IDS["project"]),
         "event_type": "API_CHANGED",

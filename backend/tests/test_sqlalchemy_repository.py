@@ -1,7 +1,7 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.core.demo_data import DEMO_IDS, seed_demo
+from tests.fixtures.demo_data import DEMO_IDS, seed_demo
 from app.models import Event
 from app.persistence import Base, SqlAlchemyProjectRepository
 
