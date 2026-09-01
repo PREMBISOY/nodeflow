@@ -39,4 +39,23 @@ def test_active_team_blocks_cross_tenant_project_agent_and_event_access():
     assert api.get(f"/api/v1/projects/{DEMO_IDS['project']}/collaboration", headers=auth(team_b_token)).status_code == 404
     assert api.get(f"/api/v1/projects/{DEMO_IDS['project']}/git/activity", headers=auth(team_b_token)).status_code == 404
     assert api.post('/api/v1/integrations/github/events', headers=auth(team_b_token), json={'project_id':str(DEMO_IDS['project']),'event_type':'commit','repository':'PREMBISOY/nodeflow','summary':'blocked'}).status_code == 404
+    assert api.post(f"/api/v1/agents/{DEMO_IDS['frontend_agent']}/messages", headers=auth(team_b_token), json={'recipient_agent_id':str(DEMO_IDS['backend_agent']),'message_type':'notice','subject':'blocked','content':'blocked'}).status_code == 404
     assert api.post('/api/v1/onboarding', headers=auth(team_b_token), json={'project_id':str(DEMO_IDS['project']),'name':'Test','role':'Engineer'}).status_code == 404
+
+def test_project_creation_and_listing_are_active_team_scoped():
+    api=client(); token=register(api,'Prem','prem@example.com'); team=api.post('/api/v1/teams',json={'name':'Team A'},headers=auth(token)).json()['data']
+    active=api.post('/api/v1/me/active-team',json={'team_id':team['id']},headers=auth(token)).json()['data']['access_token']
+    created=api.post(f"/api/v1/teams/{team['id']}/projects",headers=auth(active),json={'name':'Platform','purpose':'Shared context'}); assert created.status_code == 201
+    assert api.get(f"/api/v1/teams/{team['id']}/projects",headers=auth(active)).json()['data'][0]['id'] == created.json()['data']['id']
+
+def test_public_github_repository_connection_is_team_and_project_scoped(monkeypatch):
+    monkeypatch.setattr('app.platform.public_repository_metadata', lambda value: {'full_name': 'nodeflow/public-repo', 'html_url': 'https://github.com/nodeflow/public-repo', 'default_branch': 'main'})
+    api = client(); owner = register(api, 'Prem', 'prem@example.com')
+    team = api.post('/api/v1/teams', json={'name':'Team A'}, headers=auth(owner)).json()['data']
+    active = api.post('/api/v1/me/active-team', json={'team_id':team['id']}, headers=auth(owner)).json()['data']['access_token']
+    project = api.post(f"/api/v1/teams/{team['id']}/projects", headers=auth(active), json={'name':'Platform','purpose':'Shared context'}).json()['data']
+    connected = api.post(f"/api/v1/teams/{team['id']}/github/repositories", headers=auth(active), json={'project_id':project['id'], 'repository':'nodeflow/public-repo'})
+    assert connected.status_code == 201
+    assert connected.json()['data']['repository']['project_id'] == project['id']
+    outsider = register(api, 'Aarya', 'aarya@example.com')
+    assert api.get(f"/api/v1/teams/{team['id']}/github/repositories", headers=auth(outsider)).status_code == 404

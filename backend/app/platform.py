@@ -11,10 +11,13 @@ import hmac
 import json
 import os
 import secrets
+from urllib.parse import urlencode
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
+import httpx
 from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -38,6 +41,11 @@ class TeamCreateRequest(BaseModel): name: str
 class JoinTeamRequest(BaseModel): team_code: str
 class ActiveTeamRequest(BaseModel): team_id: UUID
 class ProjectCreateRequest(BaseModel): name: str; purpose: str; technology_stack: list[str] = Field(default_factory=list)
+class GitHubRepositoryConnectRequest(BaseModel):
+    project_id: UUID
+    repository: str = Field(min_length=3, max_length=300)
+class GitHubRepository(BaseModel):
+    id: UUID = Field(default_factory=uuid4); team_id: UUID; project_id: UUID; full_name: str; html_url: str; default_branch: str = "main"; connected_by: UUID; connected_at: datetime = Field(default_factory=utc_now)
 
 
 class PlatformStore:
@@ -47,6 +55,7 @@ class PlatformStore:
         self.teams: dict[UUID, Team] = {}; self.memberships: dict[tuple[UUID, UUID], Membership] = {}
         self.project_teams: dict[UUID, UUID] = {}; self.revoked: set[str] = set()
         self.projects: dict[UUID, Project] = {}
+        self.github_users: dict[str, UUID] = {}; self.github_repositories: dict[tuple[UUID, UUID], GitHubRepository] = {}
     @staticmethod
     def _hash(password: str, salt: bytes | None = None) -> str:
         salt = salt or secrets.token_bytes(16)
@@ -62,6 +71,15 @@ class PlatformStore:
         entry = self.by_email.get(request.email.lower())
         if not entry or not self._verify(request.password, entry[1]): raise PermissionError("Invalid email or password")
         return self.users[entry[0]]
+    def github_user(self, github_id: str, login: str, name: str | None, email: str | None) -> User:
+        subject = f"github:{github_id}"
+        if subject in self.github_users: return self.users[self.github_users[subject]]
+        safe_email = (email or f"{login}@users.noreply.github.com").lower()
+        existing = self.by_email.get(safe_email)
+        if existing:
+            user = self.users[existing[0]]; self.github_users[subject] = user.id; return user
+        user = User(name=name or login, email=safe_email, auth_subject=subject)
+        self.users[user.id] = user; self.by_email[safe_email] = (user.id, ""); self.github_users[subject] = user.id; return user
     def create_team(self, user: User, name: str) -> Team:
         code = "NF-" + "".join(ch for ch in name.upper() if ch.isalnum())[:4].ljust(2, "X") + "-" + secrets.token_hex(2).upper()
         team = Team(name=name, team_code=code, created_by=user.id); self.teams[team.id] = team; self.memberships[(user.id, team.id)] = Membership(team_id=team.id, user_id=user.id, role="OWNER"); return team
@@ -83,12 +101,16 @@ class PlatformStore:
     def require_project(self, user_id: UUID, team_id: UUID, project_id: UUID) -> None:
         self.require_member(user_id, team_id)
         if self.project_teams.get(project_id) != team_id: raise PermissionError("Project is outside the active team")
-    def create_project(self, team_id: UUID, request: ProjectCreateRequest) -> Project:
-        project = Project(name=request.name, purpose=request.purpose, technology_stack=request.technology_stack)
-        self.projects[project.id] = project; self.project_teams[project.id] = team_id
-        return project
-    def projects_for(self, team_id: UUID) -> list[Project]:
-        return [project for project_id, project in self.projects.items() if self.project_teams.get(project_id) == team_id]
+    def create_project(self, user_id: UUID, team_id: UUID, project: Project) -> Project:
+        self.require_member(user_id, team_id); self.project_teams[project.id] = team_id; return project
+    def list_projects(self, user_id: UUID, team_id: UUID, projects: list[Project]) -> list[Project]:
+        self.require_member(user_id, team_id); return [project for project in projects if self.project_teams.get(project.id) == team_id]
+    def connect_github_repository(self, user_id: UUID, team_id: UUID, request: GitHubRepositoryConnectRequest, metadata: dict) -> GitHubRepository:
+        self.require_project(user_id, team_id, request.project_id)
+        repo = GitHubRepository(team_id=team_id, project_id=request.project_id, full_name=metadata["full_name"], html_url=metadata["html_url"], default_branch=metadata.get("default_branch") or "main", connected_by=user_id)
+        self.github_repositories[(team_id, request.project_id)] = repo; return repo
+    def github_repositories_for(self, user_id: UUID, team_id: UUID) -> list[GitHubRepository]:
+        self.require_member(user_id, team_id); return [repo for repo in self.github_repositories.values() if repo.team_id == team_id]
 
 
 class SqlPlatformStore:
@@ -110,6 +132,16 @@ class SqlPlatformStore:
         row=self.session.execute(text("select u.id,u.name,u.email,u.auth_subject,u.created_at,c.password_hash from users u join user_credentials c on c.user_id=u.id where u.email=:email"), {"email":request.email.lower()}).first()
         if not row or not PlatformStore._verify(request.password,row.password_hash): raise PermissionError("Invalid email or password")
         return self._user(row)
+    def github_user(self, github_id: str, login: str, name: str | None, email: str | None) -> User:
+        subject = f"github:{github_id}"
+        row = self.session.execute(text("select id,name,email,auth_subject,created_at from users where auth_subject=:subject"), {"subject": subject}).first()
+        if row: return self._user(row)
+        safe_email = (email or f"{login}@users.noreply.github.com").lower()
+        row = self.session.execute(text("select id,name,email,auth_subject,created_at from users where email=:email"), {"email": safe_email}).first()
+        if row: return self._user(row)
+        user = User(name=name or login, email=safe_email, auth_subject=subject)
+        self.session.execute(text("insert into users (id,name,email,auth_subject,created_at,updated_at) values (:id,:name,:email,:subject,:created,:created)"), {"id":str(user.id),"name":user.name,"email":user.email,"subject":subject,"created":user.created_at})
+        self.session.commit(); return user
     def get_user(self, user_id: UUID) -> User:
         row=self.session.execute(text("select id,name,email,auth_subject,created_at from users where id=:id"), {"id":str(user_id)}).first()
         if not row: raise KeyError(user_id)
@@ -139,18 +171,31 @@ class SqlPlatformStore:
         self.require_member(user_id,team_id)
         row=self.session.execute(text("select 1 from projects where id=:project and team_id=:team"), {"project":str(project_id),"team":str(team_id)}).first()
         if not row: raise PermissionError("Project is outside the active team")
-    def create_project(self, team_id: UUID, request: ProjectCreateRequest) -> Project:
-        project = Project(name=request.name, purpose=request.purpose, technology_stack=request.technology_stack)
-        self.session.execute(text("insert into projects (id,name,purpose,technology_stack,status,created_at,team_id) values (:id,:name,:purpose,:stack,:status,:created,:team)"), {"id":str(project.id),"name":project.name,"purpose":project.purpose,"stack":json.dumps(project.technology_stack),"status":project.status,"created":project.created_at,"team":str(team_id)})
-        self.session.commit()
-        return project
-    def projects_for(self, team_id: UUID) -> list[Project]:
-        rows = self.session.execute(text("select id,name,purpose,technology_stack,status,created_at from projects where team_id=:team order by created_at"), {"team":str(team_id)})
-        return [Project.model_validate(dict(row._mapping)) for row in rows]
+    def create_project(self,user_id: UUID,team_id: UUID,project: Project) -> Project:
+        self.require_member(user_id,team_id)
+        self.session.execute(text("insert into projects (id,team_id,name,purpose,technology_stack,status,created_at) values (:id,:team,:name,:purpose,:stack,:status,:created)"), {"id":str(project.id),"team":str(team_id),"name":project.name,"purpose":project.purpose,"stack":json.dumps(project.technology_stack),"status":project.status,"created":project.created_at})
+        self.session.commit(); return project
+    def list_projects(self,user_id: UUID,team_id: UUID,projects: list[Project] | None = None) -> list[Project]:
+        self.require_member(user_id,team_id)
+        rows=self.session.execute(text("select id,name,purpose,technology_stack,status,created_at from projects where team_id=:team order by created_at"), {"team":str(team_id)})
+        return [Project(id=row.id,name=row.name,purpose=row.purpose,technology_stack=row.technology_stack,status=row.status,created_at=row.created_at) for row in rows]
+    def connect_github_repository(self, user_id: UUID, team_id: UUID, request: GitHubRepositoryConnectRequest, metadata: dict) -> GitHubRepository:
+        self.require_project(user_id, team_id, request.project_id)
+        repo = GitHubRepository(team_id=team_id, project_id=request.project_id, full_name=metadata["full_name"], html_url=metadata["html_url"], default_branch=metadata.get("default_branch") or "main", connected_by=user_id)
+        self.session.execute(text("insert into team_github_repositories (id,team_id,project_id,full_name,html_url,default_branch,connected_by,connected_at) values (:id,:team,:project,:name,:url,:branch,:user,:at) on conflict (team_id,project_id) do update set full_name=excluded.full_name,html_url=excluded.html_url,default_branch=excluded.default_branch,connected_by=excluded.connected_by,connected_at=excluded.connected_at"), {"id":str(repo.id),"team":str(team_id),"project":str(request.project_id),"name":repo.full_name,"url":repo.html_url,"branch":repo.default_branch,"user":str(user_id),"at":repo.connected_at})
+        self.session.commit(); return repo
+    def github_repositories_for(self, user_id: UUID, team_id: UUID) -> list[GitHubRepository]:
+        self.require_member(user_id, team_id)
+        rows = self.session.execute(text("select id,team_id,project_id,full_name,html_url,default_branch,connected_by,connected_at from team_github_repositories where team_id=:team order by connected_at"), {"team":str(team_id)})
+        return [GitHubRepository(id=row.id,team_id=row.team_id,project_id=row.project_id,full_name=row.full_name,html_url=row.html_url,default_branch=row.default_branch,connected_by=row.connected_by,connected_at=row.connected_at) for row in rows]
 
 
 class SessionCodec:
-    def __init__(self) -> None: self.secret = os.getenv("JWT_SECRET", "development-only-change-me").encode()
+    def __init__(self) -> None:
+        secret = os.getenv("JWT_SECRET")
+        if os.getenv("DATABASE_URL") and (not secret or secret == "development-only-change-me"):
+            raise RuntimeError("JWT_SECRET must be set to a secure value when DATABASE_URL is configured")
+        self.secret = (secret or "development-only-change-me").encode()
     def issue(self, user_id: UUID, active_team_id: UUID | None = None) -> str:
         payload = {"sub": str(user_id), "team": str(active_team_id) if active_team_id else None, "exp": int((utc_now() + timedelta(hours=12)).timestamp()), "jti": secrets.token_urlsafe(16)}
         body = _b64(json.dumps(payload, separators=(",", ":")).encode()); signature = _b64(hmac.new(self.secret, body.encode(), hashlib.sha256).digest()); return body + "." + signature
@@ -160,6 +205,12 @@ class SessionCodec:
         data = json.loads(_unb64(body));
         if data["exp"] < int(utc_now().timestamp()): raise PermissionError("Session expired")
         return data
+    def issue_oauth_state(self) -> str:
+        payload = {"typ":"github_oauth", "exp": int((utc_now() + timedelta(minutes=10)).timestamp()), "nonce": secrets.token_urlsafe(16)}
+        body = _b64(json.dumps(payload, separators=(",", ":")).encode()); return body + "." + _b64(hmac.new(self.secret, body.encode(), hashlib.sha256).digest())
+    def read_oauth_state(self, state: str) -> None:
+        data = self.read(state)
+        if data.get("typ") != "github_oauth": raise PermissionError("Invalid OAuth state")
 
 
 router = APIRouter(prefix="/api/v1")
@@ -187,6 +238,24 @@ def require_project_access(request: Request, project_id: UUID, authorization: st
     try: platform(request).require_project(user.id, active_team, project_id)
     except PermissionError: raise HTTPException(404, "Project not found")
 
+def github_configuration() -> tuple[str, str, str]:
+    client_id, client_secret = os.getenv("GITHUB_OAUTH_CLIENT_ID"), os.getenv("GITHUB_OAUTH_CLIENT_SECRET")
+    redirect_uri = os.getenv("GITHUB_OAUTH_REDIRECT_URI", "https://nodeflow.up.railway.app/api/v1/auth/github/callback")
+    if not client_id or not client_secret: raise HTTPException(503, "GitHub sign-in is not configured")
+    return client_id, client_secret, redirect_uri
+
+def public_repository_metadata(value: str) -> dict:
+    name = value.strip().removeprefix("https://github.com/").removesuffix("/").removesuffix(".git")
+    if name.count("/") != 1: raise HTTPException(422, "Repository must be in owner/repository format")
+    try:
+        response = httpx.get(f"https://api.github.com/repos/{name}", headers={"Accept": "application/vnd.github+json"}, timeout=10)
+    except httpx.HTTPError as exc: raise HTTPException(502, "Could not verify the GitHub repository") from exc
+    if response.status_code == 404: raise HTTPException(404, "Public GitHub repository not found")
+    if response.status_code != 200: raise HTTPException(502, "Could not verify the GitHub repository")
+    data = response.json()
+    if data.get("private") is not False: raise HTTPException(422, "Only public GitHub repositories can be connected")
+    return {"full_name": data["full_name"], "html_url": data["html_url"], "default_branch": data.get("default_branch") or "main"}
+
 @router.post("/auth/register", status_code=201)
 def register(payload: RegisterRequest, request: Request):
     try: user = platform(request).register(payload)
@@ -198,6 +267,31 @@ def login(payload: LoginRequest, request: Request):
     except PermissionError as exc: raise HTTPException(401, str(exc))
     teams = platform(request).teams_for(user.id); active = teams[0].id if teams else None
     return envelope({"user": user, "access_token": codec(request).issue(user.id, active), "token_type": "bearer"})
+@router.get("/auth/github")
+def github_login(request: Request):
+    client_id, _client_secret, redirect_uri = github_configuration()
+    query = urlencode({"client_id":client_id, "redirect_uri":redirect_uri, "scope":"read:user user:email", "state":codec(request).issue_oauth_state()})
+    return RedirectResponse(f"https://github.com/login/oauth/authorize?{query}")
+@router.get("/auth/github/callback")
+def github_callback(code: str, state: str, request: Request):
+    try: codec(request).read_oauth_state(state)
+    except (ValueError, PermissionError): raise HTTPException(400, "Invalid or expired GitHub OAuth state")
+    client_id, client_secret, redirect_uri = github_configuration()
+    try:
+        token_response = httpx.post("https://github.com/login/oauth/access_token", data={"client_id":client_id,"client_secret":client_secret,"code":code,"redirect_uri":redirect_uri}, headers={"Accept":"application/json"}, timeout=15)
+        access_token = token_response.json().get("access_token") if token_response.is_success else None
+        if not access_token: raise HTTPException(401, "GitHub sign-in was rejected")
+        profile_response = httpx.get("https://api.github.com/user", headers={"Authorization":f"Bearer {access_token}","Accept":"application/vnd.github+json"}, timeout=15)
+        if not profile_response.is_success: raise HTTPException(401, "Could not read the GitHub profile")
+        profile = profile_response.json()
+        emails_response = httpx.get("https://api.github.com/user/emails", headers={"Authorization":f"Bearer {access_token}","Accept":"application/vnd.github+json"}, timeout=15)
+        emails = emails_response.json() if emails_response.is_success else []
+    except httpx.HTTPError as exc: raise HTTPException(502, "GitHub sign-in is temporarily unavailable") from exc
+    email = profile.get("email") or next((item["email"] for item in emails if item.get("primary") and item.get("verified")), None)
+    user = platform(request).github_user(str(profile["id"]), profile["login"], profile.get("name"), email)
+    teams = platform(request).teams_for(user.id); active = teams[0].id if teams else None
+    token = codec(request).issue(user.id, active)
+    return RedirectResponse("/#access_token=" + token, status_code=303)
 @router.post("/auth/logout")
 def logout(request: Request, authorization: str | None = Header(default=None)):
     _user, _team, data = current(request, authorization); platform(request).revoke(data["jti"]); return envelope({"logged_out": True})
@@ -240,16 +334,43 @@ def members(team_id: UUID, request: Request, authorization: str | None = Header(
     except PermissionError: raise HTTPException(403, "Forbidden")
     return envelope(platform(request).members_for(team_id))
 
-@router.get("/teams/{team_id}/projects")
-def projects(team_id: UUID, request: Request, authorization: str | None = Header(default=None)):
-    user, _, _ = current(request, authorization)
+def active_team_for(request: Request, team_id: UUID, authorization: str | None):
+    user, active, _ = current(request, authorization)
+    # A just-created account/team can have a valid session without an active
+    # team claim. Membership is still required; a conflicting active team is
+    # rejected to prevent accidental cross-team requests.
+    if active is not None and active != team_id: raise HTTPException(403, "Select the requested team as active")
     try: platform(request).require_member(user.id, team_id)
     except PermissionError: raise HTTPException(404, "Team not found")
-    return envelope(platform(request).projects_for(team_id))
+    return user
+
+@router.get("/teams/{team_id}/projects")
+def list_team_projects(team_id: UUID, request: Request, authorization: str | None = Header(default=None)):
+    user = active_team_for(request, team_id, authorization)
+    repository = request.app.state.container.repository
+    projects = list(repository.projects.values()) if hasattr(repository, "projects") else []
+    return envelope(platform(request).list_projects(user.id, team_id, projects))
 
 @router.post("/teams/{team_id}/projects", status_code=201)
-def create_project(team_id: UUID, payload: ProjectCreateRequest, request: Request, authorization: str | None = Header(default=None)):
-    user, _, _ = current(request, authorization)
-    try: platform(request).require_member(user.id, team_id)
-    except PermissionError: raise HTTPException(404, "Team not found")
-    return envelope(platform(request).create_project(team_id, payload))
+def create_team_project(team_id: UUID, payload: ProjectCreateRequest, request: Request, authorization: str | None = Header(default=None)):
+    user = active_team_for(request, team_id, authorization)
+    project = Project(name=payload.name, purpose=payload.purpose, technology_stack=payload.technology_stack)
+    saved = platform(request).create_project(user.id, team_id, project)
+    repository = request.app.state.container.repository
+    if isinstance(platform(request), PlatformStore):
+        repository.projects[saved.id] = saved
+    return envelope(saved)
+
+@router.get("/teams/{team_id}/github/repositories")
+def list_github_repositories(team_id: UUID, request: Request, authorization: str | None = Header(default=None)):
+    user = active_team_for(request, team_id, authorization)
+    return envelope(platform(request).github_repositories_for(user.id, team_id))
+
+@router.post("/teams/{team_id}/github/repositories", status_code=201)
+def connect_github_repository(team_id: UUID, payload: GitHubRepositoryConnectRequest, request: Request, authorization: str | None = Header(default=None)):
+    user = active_team_for(request, team_id, authorization)
+    try: platform(request).require_project(user.id, team_id, payload.project_id)
+    except PermissionError: raise HTTPException(404, "Project not found")
+    metadata = public_repository_metadata(payload.repository)
+    connected = platform(request).connect_github_repository(user.id, team_id, payload, metadata)
+    return envelope({"repository": connected, "webhook_url": str(request.base_url).rstrip("/") + "/api/v1/integrations/github/events"})
