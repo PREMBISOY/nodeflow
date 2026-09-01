@@ -30,7 +30,7 @@ All handled failures are:
 | GET | `/api/v1/agents/{id}/context?scope=related&task_id={taskId}` | Scoped, optionally task-aware agent context |
 | GET | `/api/v1/agents/{id}/updates` | Relevant propagated updates |
 | POST | `/api/v1/events` | Record and process an event/change |
-| POST | `/api/v1/integrations/github/events` | Ingest a thin GitHub commit, PR, or branch event |
+| POST | `/api/v1/integrations/github/webhook/{connection_id}` | Ingest a GitHub event with HMAC and idempotency |
 | GET | `/api/v1/projects/{id}/git/activity` | Git event activity normalized for product flows |
 | POST | `/api/v1/agents/{id}/messages` | Send and record an agent message |
 | POST | `/api/v1/onboarding` | Generate a role-specific briefing |
