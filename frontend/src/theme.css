@@ -4,3 +4,22 @@
 .team-code{max-width:420px;text-align:center}.team-code>small{font:10px 'DM Mono';color:#a79dff}.team-code>strong{display:block;margin:20px 0 13px;padding:13px;border:1px dashed #8e83ef;border-radius:7px;color:#c4bdff;font:700 20px 'DM Mono';letter-spacing:1px}.team-code button{border:0;border-radius:6px;padding:10px 13px;background:#343052;color:#eeeaff;font-weight:700}.team-code .continue{display:block;width:100%;margin-top:10px;background:#7666ec;color:#fff}:root[data-theme="light"] .team-code>strong{background:#f5f3ff;color:#4b429c}:root[data-theme="light"] .team-code button{background:#e5e2ff;color:#433a90}
 .auth-card>button:not(.link){width:100%;margin-top:10px;border:1px solid #44464d;border-radius:8px;background:#24252a;color:#f5f5f7;padding:10px 13px;font-weight:700}.auth-card>button:not(.link):hover{border-color:#c5e64c;background:#292b1b}.auth-card>.link{margin-top:16px}
 html[data-theme="light"] body .auth,html[data-theme="light"] body .setup{background:radial-gradient(700px 500px at 30% 10%,#e4e0ff,transparent 60%),#f4f6fa!important}html[data-theme="light"] body .auth-card,html[data-theme="light"] body .setup .panel{background:#fff!important;color:#172033!important;border-color:#d7dce6!important;box-shadow:0 24px 60px #28324a1c!important}html[data-theme="light"] body .auth-card h1,html[data-theme="light"] body .auth-card label,html[data-theme="light"] body .auth-card p,html[data-theme="light"] body .setup h1,html[data-theme="light"] body .setup p{color:#172033!important}html[data-theme="light"] body .auth-card input,html[data-theme="light"] body .setup input{background:#fff!important;color:#172033!important;border-color:#aeb9ca!important}html[data-theme="light"] body .auth-card .form-error,html[data-theme="light"] body .setup .form-error{color:#a1162a!important}:root[data-theme="light"] .briefing{color:#34425a}
+
+/* Light mode contrast fixes */
+:root[data-theme="light"] .brand>b { background: #332b7a; color: #fff; }
+:root[data-theme="light"] .team-actions button, :root[data-theme="light"] .link { color: #332b7a; }
+:root[data-theme="light"] .headline small { color: #332b7a; }
+:root[data-theme="light"] .task>b, :root[data-theme="light"] .node>b { color: #5148a5; }
+:root[data-theme="light"] .tabs .selected { background: #e9e8ff; border-color: #5148a5; color: #332b7a; }
+:root[data-theme="light"] .error button, :root[data-theme="light"] .form button, :root[data-theme="light"] .auth-card form button { background: #5148a5; color: #fff; }
+:root[data-theme="light"] .agent strong, :root[data-theme="light"] .task strong, :root[data-theme="light"] .event strong, :root[data-theme="light"] .node strong, :root[data-theme="light"] .metric strong { color: #1b2639; }
+:root[data-theme="light"] .empty b { color: #1b2639; }
+:root[data-theme="light"] .empty strong, :root[data-theme="light"] .error strong { color: #1b2639; }
+:root[data-theme="light"] .team-label, :root[data-theme="light"] .team-label select { color: #1b2639; background: #fff; }
+:root[data-theme="light"] .team-actions { color: #1b2639; }
+
+
+:root[data-theme="light"] .team-code-display {
+    color: #332b7a;
+}
+
