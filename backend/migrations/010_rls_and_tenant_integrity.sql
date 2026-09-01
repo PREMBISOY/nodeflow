@@ -30,11 +30,7 @@ DECLARE
 BEGIN
   FOREACH tbl IN ARRAY tables LOOP
     FOREACH role_name IN ARRAY roles LOOP
-      EXECUTE format(
-        'REVOKE ALL ON TABLE %I FROM %I',
-        tbl,
-        role_name
-      );
+      EXECUTE 'REVOKE ALL ON TABLE ' || quote_ident(tbl) || ' FROM ' || quote_ident(role_name);
     END LOOP;
   END LOOP;
 EXCEPTION WHEN others THEN
@@ -60,8 +56,8 @@ DECLARE
   ];
 BEGIN
   FOREACH tbl IN ARRAY tables LOOP
-    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', tbl);
-    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', tbl);
+    EXECUTE 'ALTER TABLE ' || quote_ident(tbl) || ' ENABLE ROW LEVEL SECURITY';
+    EXECUTE 'ALTER TABLE ' || quote_ident(tbl) || ' FORCE ROW LEVEL SECURITY';
   END LOOP;
 EXCEPTION WHEN others THEN
   NULL;
