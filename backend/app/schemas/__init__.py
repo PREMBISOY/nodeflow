@@ -1,1 +1,1 @@
-from .persistence import *
+"""Typed request and response schemas."""

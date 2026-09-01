@@ -1,1 +1,1 @@
-"""NodeFlow backend."""
+"""NodeFlow core intelligence backend."""
