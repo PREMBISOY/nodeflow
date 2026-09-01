@@ -8,6 +8,7 @@ from app.services.agent_gateway import AgentGateway, RecordingAgentGateway
 from app.services.context_service import ContextService
 from app.services.event_processor import EventProcessor
 from app.services.git_intelligence import GitIntelligenceService
+from app.services.github_repository_intelligence import GitHubRepositoryIntelligence
 from app.services.collaboration import CollaborationService
 from app.services.messaging import MessagingService
 from app.services.onboarding import OnboardingService
@@ -25,6 +26,7 @@ class ServiceContainer:
     messaging: MessagingService
     onboarding: OnboardingService
     git: GitIntelligenceService
+    github_sync: GitHubRepositoryIntelligence
     collaboration: CollaborationService
     gateway: AgentGateway
 
@@ -39,6 +41,7 @@ def build_container(
     relevance = RelevanceEngine()
     gateway = gateway or RecordingAgentGateway()
     events = EventProcessor(repository, impact, relevance, gateway)
+    git = GitIntelligenceService(repository, events)
     return ServiceContainer(
         repository=repository,
         brain=brain,
@@ -47,7 +50,8 @@ def build_container(
         events=events,
         messaging=MessagingService(repository, gateway),
         onboarding=OnboardingService(repository, brain),
-        git=GitIntelligenceService(repository, events),
+        git=git,
+        github_sync=GitHubRepositoryIntelligence(repository, git),
         collaboration=CollaborationService(repository, brain),
         gateway=gateway,
     )

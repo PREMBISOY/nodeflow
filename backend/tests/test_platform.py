@@ -66,7 +66,7 @@ def test_team_project_endpoints_require_an_exact_active_team():
 
 def test_public_github_repository_connection_is_team_and_project_scoped(monkeypatch):
     monkeypatch.setattr('app.platform.public_repository_metadata', lambda value: {'full_name': 'nodeflow/public-repo', 'html_url': 'https://github.com/nodeflow/public-repo', 'default_branch': 'main'})
-    api = client(); owner = register(api, 'Prem', 'prem@example.com')
+    api = client(); monkeypatch.setattr(api.app.state.container.github_sync, 'sync', lambda *_: {'components': 2, 'commits_imported': 3}); owner = register(api, 'Prem', 'prem@example.com')
     team = api.post('/api/v1/teams', json={'name':'Team A'}, headers=auth(owner)).json()['data']
     active = api.post('/api/v1/me/active-team', json={'team_id':team['id']}, headers=auth(owner)).json()['data']['access_token']
     project = api.post(f"/api/v1/teams/{team['id']}/projects", headers=auth(active), json={'name':'Platform','purpose':'Shared context'}).json()['data']
@@ -79,7 +79,7 @@ def test_public_github_repository_connection_is_team_and_project_scoped(monkeypa
 def test_github_webhook_requires_a_valid_signature_and_ingests_connected_repository(monkeypatch):
     monkeypatch.setenv('GITHUB_WEBHOOK_SECRET', 'webhook-test-secret')
     monkeypatch.setattr('app.platform.public_repository_metadata', lambda value: {'full_name': 'nodeflow/public-repo', 'html_url': 'https://github.com/nodeflow/public-repo', 'default_branch': 'main'})
-    api=client(); token=register(api,'Prem','prem@example.com'); team=api.post('/api/v1/teams',json={'name':'Team A'},headers=auth(token)).json()['data']; active=team['access_token']
+    api=client(); monkeypatch.setattr(api.app.state.container.github_sync, 'sync', lambda *_: {'components': 2, 'commits_imported': 1}); token=register(api,'Prem','prem@example.com'); team=api.post('/api/v1/teams',json={'name':'Team A'},headers=auth(token)).json()['data']; active=team['access_token']
     project=api.post(f"/api/v1/teams/{team['id']}/projects",headers=auth(active),json={'name':'Platform','purpose':'Shared context'}).json()['data']
     api.post(f"/api/v1/teams/{team['id']}/github/repositories",headers=auth(active),json={'project_id':project['id'],'repository':'nodeflow/public-repo'})
     payload={'repository':{'full_name':'nodeflow/public-repo'},'ref':'refs/heads/main','after':'abc123','sender':{'login':'prem'},'commits':[{'added':['backend/app/main.py'],'modified':[],'removed':[]}]}

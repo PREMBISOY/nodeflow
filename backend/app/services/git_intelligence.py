@@ -22,6 +22,7 @@ class GitIntelligenceService:
             "commit_sha": request.commit_sha, "pull_request_number": request.pull_request_number,
             "actor_name": request.actor_name, "changed_files": request.changed_files,
             "action": request.action,
+            "historical": request.occurred_at is not None,
             "requires_approval": self._requires_approval(request),
             "flow_stage": self._flow_stage(request),
         }
@@ -29,12 +30,13 @@ class GitIntelligenceService:
             return self.events.process(EventCreate(
                 project_id=request.project_id, event_type=f"github_{request.event_type}",
                 actor_type="agent" if actor_id else "system", actor_id=actor_id,
-                summary=request.summary, payload=payload,
+                summary=request.summary, payload=payload, occurred_at=request.occurred_at,
             ))
         return self.events.process(EventCreate(
             project_id=request.project_id, event_type=f"github_{request.event_type}",
             actor_type="agent" if actor_id else "system", actor_id=actor_id,
             component_ids=component_ids, summary=request.summary, payload=payload,
+            occurred_at=request.occurred_at,
             changes=[
                 {
                     "component_id": component_id,

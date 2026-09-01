@@ -23,6 +23,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 from app.models import Project
 from app.schemas.intelligence import GitHubEventCreate
+from app.services.github_repository_intelligence import RepositorySyncError
 
 
 def utc_now() -> datetime: return datetime.now(timezone.utc)
@@ -403,7 +404,7 @@ def active_team_for(request: Request, team_id: UUID, authorization: str | None):
 def list_team_projects(team_id: UUID, request: Request, authorization: str | None = Header(default=None)):
     user = active_team_for(request, team_id, authorization)
     repository = request.app.state.container.repository
-    projects = list(repository.projects.values()) if hasattr(repository, "projects") else []
+    projects = repository.list_projects() if hasattr(repository, "list_projects") else list(repository.projects.values())
     return envelope(platform(request).list_projects(user.id, team_id, projects))
 
 @router.post("/teams/{team_id}/projects", status_code=201)
@@ -432,7 +433,21 @@ def connect_github_repository(team_id: UUID, payload: GitHubRepositoryConnectReq
     if existing and existing.project_id != payload.project_id:
         raise HTTPException(409, "This GitHub repository is already connected to another project")
     connected = platform(request).connect_github_repository(user.id, team_id, payload, metadata)
-    return envelope({"repository": connected, "webhook_url": str(request.base_url).rstrip("/") + "/api/v1/integrations/github/webhook"})
+    try:
+        sync = request.app.state.container.github_sync.sync(connected.project_id, connected.full_name, connected.default_branch)
+    except RepositorySyncError as exc:
+        raise HTTPException(502, str(exc))
+    return envelope({"repository": connected, "sync": sync, "webhook_url": str(request.base_url).rstrip("/") + "/api/v1/integrations/github/webhook"})
+
+@router.post("/teams/{team_id}/github/repositories/{project_id}/sync")
+def sync_github_repository(team_id: UUID, project_id: UUID, request: Request, authorization: str | None = Header(default=None)):
+    user = active_team_for(request, team_id, authorization)
+    try: platform(request).require_project(user.id, team_id, project_id)
+    except PermissionError: raise HTTPException(404, "Project not found")
+    connected = next((item for item in platform(request).github_repositories_for(user.id, team_id) if item.project_id == project_id), None)
+    if connected is None: raise HTTPException(404, "GitHub repository not connected")
+    try: return envelope(request.app.state.container.github_sync.sync(project_id, connected.full_name, connected.default_branch))
+    except RepositorySyncError as exc: raise HTTPException(502, str(exc))
 
 @router.post("/integrations/github/webhook", status_code=202)
 async def ingest_github_webhook(request: Request, x_github_event: str | None = Header(default=None), x_hub_signature_256: str | None = Header(default=None)):
@@ -450,4 +465,10 @@ async def ingest_github_webhook(request: Request, x_github_event: str | None = H
     if repository is None: raise HTTPException(404, "GitHub repository is not connected")
     event = github_webhook_event(payload, x_github_event or "", repository.project_id)
     if event is None: return envelope({"ignored": True})
+    if x_github_event == "push" and event.ref == f"refs/heads/{repository.default_branch}":
+        try:
+            sync = request.app.state.container.github_sync.sync(repository.project_id, repository.full_name, repository.default_branch)
+        except RepositorySyncError as exc:
+            raise HTTPException(502, str(exc))
+        return envelope({"synchronized": True, "sync": sync})
     return envelope(request.app.state.container.git.ingest(event))

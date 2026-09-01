@@ -40,6 +40,8 @@ class ProjectKnowledgeRepository(Protocol):
     def list_decisions(self, project_id: UUID) -> list[Decision]: ...
     def list_memories(self, project_id: UUID) -> list[Memory]: ...
     def list_changes(self, project_id: UUID, limit: int = 25) -> list[Change]: ...
+    def sync_github_architecture(self, project_id: UUID, components: list[Component], relationships: list[Relationship]) -> None: ...
+    def has_github_commit(self, project_id: UUID, repository: str, commit_sha: str) -> bool: ...
     def add_event(self, event: Event) -> Event: ...
     def add_change(self, change: Change) -> Change: ...
     def add_message(self, message: Message) -> Message: ...
@@ -88,7 +90,7 @@ class InMemoryProjectRepository:
         return self._require(self.agents, agent_id, "Agent")
 
     def list_components(self, project_id: UUID) -> list[Component]:
-        return self._for_project(self.components, project_id)
+        return [item for item in self._for_project(self.components, project_id) if "state:stale" not in item.tags]
 
     def list_relationships(self, project_id: UUID) -> list[Relationship]:
         return self._for_project(self.relationships, project_id)
@@ -112,6 +114,27 @@ class InMemoryProjectRepository:
     def list_changes(self, project_id: UUID, limit: int = 25) -> list[Change]:
         items = self._for_project(self.changes, project_id)
         return sorted(items, key=lambda item: item.created_at, reverse=True)[:limit]
+
+    def sync_github_architecture(self, project_id: UUID, components: list[Component], relationships: list[Relationship]) -> None:
+        generated = [item for item in self.components.values() if item.project_id == project_id and "source:github" in item.tags]
+        current_ids = {item.id for item in components}
+        for item in generated:
+            if item.id not in current_ids:
+                self.components[item.id] = item.model_copy(update={"tags": [*item.tags, "state:stale"]})
+        self.relationships = {
+            item_id: item for item_id, item in self.relationships.items()
+            if not (item.project_id == project_id and item.description.startswith("GitHub-derived:"))
+        }
+        for item in components: self.components[item.id] = item
+        for item in relationships: self.relationships[item.id] = item
+
+    def has_github_commit(self, project_id: UUID, repository: str, commit_sha: str) -> bool:
+        return any(
+            event.project_id == project_id and event.payload.get("provider") == "github"
+            and event.payload.get("repository", "").casefold() == repository.casefold()
+            and event.payload.get("commit_sha") == commit_sha
+            for event in self.events.values()
+        )
 
     def add_event(self, event: Event) -> Event:
         self.events[event.id] = event

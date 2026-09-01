@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Any, TypeVar
 from uuid import UUID
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, Uuid, create_engine, select
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, Uuid, create_engine, delete, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.types import JSON
@@ -210,9 +210,11 @@ class SqlAlchemyProjectRepository:
         return [self._entity(row, model) for row in self.session.scalars(query)]
 
     def get_project(self, project_id: UUID) -> Project: return self._get(ProjectRow, Project, project_id)
+    def list_projects(self) -> list[Project]: return [self._entity(row, Project) for row in self.session.scalars(select(ProjectRow))]
     def get_component(self, component_id: UUID) -> Component: return self._get(ComponentRow, Component, component_id)
     def get_agent(self, agent_id: UUID) -> Agent: return self._get(AgentRow, Agent, agent_id)
-    def list_components(self, project_id: UUID) -> list[Component]: return self._list(ComponentRow, Component, project_id)
+    def list_components(self, project_id: UUID) -> list[Component]:
+        return [item for item in self._list(ComponentRow, Component, project_id) if "state:stale" not in item.tags]
     def list_relationships(self, project_id: UUID) -> list[Relationship]: return self._list(RelationshipRow, Relationship, project_id)
     def list_tasks(self, project_id: UUID) -> list[Task]: return self._list(TaskRow, Task, project_id)
     def list_agents(self, project_id: UUID) -> list[Agent]: return self._list(AgentRow, Agent, project_id)
@@ -220,6 +222,22 @@ class SqlAlchemyProjectRepository:
     def list_decisions(self, project_id: UUID) -> list[Decision]: return self._list(DecisionRow, Decision, project_id)
     def list_memories(self, project_id: UUID) -> list[Memory]: return self._list(MemoryRow, Memory, project_id)
     def list_changes(self, project_id: UUID, limit: int = 25) -> list[Change]: return self._list(ChangeRow, Change, project_id, ChangeRow.created_at, limit)
+    def sync_github_architecture(self, project_id: UUID, components: list[Component], relationships: list[Relationship]) -> None:
+        generated = [row for row in self.session.scalars(select(ComponentRow).where(ComponentRow.project_id == project_id)) if "source:github" in (row.tags or [])]
+        current_ids = {item.id for item in components}
+        for row in generated:
+            if row.id not in current_ids:
+                row.tags = [tag for tag in (row.tags or []) if tag != "state:stale"] + ["state:stale"]
+        self.session.execute(delete(RelationshipRow).where(RelationshipRow.project_id == project_id, RelationshipRow.description.startswith("GitHub-derived:")))
+        for component in components:
+            self.session.merge(ComponentRow(**self._data(component)))
+        self.session.flush()
+        for relationship in relationships:
+            self.session.merge(RelationshipRow(**self._data(relationship)))
+        self.session.commit()
+    def has_github_commit(self, project_id: UUID, repository: str, commit_sha: str) -> bool:
+        events = self.session.scalars(select(EventRow).where(EventRow.project_id == project_id, EventRow.event_type == "github_commit"))
+        return any(event.payload.get("repository", "").casefold() == repository.casefold() and event.payload.get("commit_sha") == commit_sha for event in events)
     def add_event(self, event: Event) -> Event: return self._add(event, EventRow, Event)
     def add_change(self, change: Change) -> Change: return self._add(change, ChangeRow, Change)
     def add_message(self, message: Message) -> Message: return self._add(message, MessageRow, Message)

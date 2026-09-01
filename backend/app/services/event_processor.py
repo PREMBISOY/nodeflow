@@ -6,6 +6,7 @@ from uuid import UUID
 from app.engines.impact_analysis import ChangeImpactAnalyzer
 from app.engines.relevance import RelevanceEngine
 from app.models import Change, ContextUpdate, Event
+from app.models.entities import utc_now
 from app.schemas.intelligence import EventCreate, EventProcessingResult
 from app.services.agent_gateway import AgentGateway
 from app.services.repository import ProjectKnowledgeRepository
@@ -77,6 +78,7 @@ class EventProcessor:
             component_ids=component_ids,
             summary=request.summary,
             payload=request.payload,
+            created_at=request.occurred_at or utc_now(),
         )
         self.repository.add_event(event)
         if not changes:

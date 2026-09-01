@@ -21,7 +21,7 @@ class ProjectBrain:
             relationships=self.repository.list_relationships(project_id),
             tasks=self.repository.list_tasks(project_id),
             agents=self.repository.list_agents(project_id),
-            recent_events=self.repository.list_events(project_id),
+            recent_events=self.repository.list_events(project_id, limit=5_000),
             decisions=self.repository.list_decisions(project_id),
             memories=self.repository.list_memories(project_id),
             recent_changes=self.repository.list_changes(project_id),

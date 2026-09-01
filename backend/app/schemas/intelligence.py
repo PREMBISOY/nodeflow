@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
@@ -54,6 +55,7 @@ class EventCreate(BaseModel):
     component_ids: list[UUID] = Field(default_factory=list, max_length=100)
     summary: str = Field(min_length=1, max_length=2_000)
     payload: dict[str, Any] = Field(default_factory=dict)
+    occurred_at: datetime | None = None
     change: "ChangeCreate | None" = None
     changes: list["ChangeCreate"] = Field(default_factory=list, max_length=50)
 
@@ -86,6 +88,7 @@ class GitHubEventCreate(BaseModel):
     pull_request_number: int | None = None
     actor_name: str | None = Field(default=None, max_length=200)
     requires_approval: bool | None = None
+    occurred_at: datetime | None = None
 
 
 class ApprovalDecisionCreate(BaseModel):
