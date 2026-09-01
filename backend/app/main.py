@@ -12,9 +12,8 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router
 from app.core.container import build_container
-from app.core.demo_data import seed_demo
 from app.services.agent_gateway import AgentGateway
-from app.services.repository import EntityNotFoundError, InMemoryProjectRepository, ProjectKnowledgeRepository
+from app.services.repository import EntityNotFoundError, ProjectKnowledgeRepository
 from app.platform import PlatformStore, SessionCodec, router as platform_router
 
 
@@ -31,7 +30,7 @@ def error_response(status_code: int, code: str, message: str) -> JSONResponse:
 def create_app(
     repository: ProjectKnowledgeRepository | None = None,
     gateway: AgentGateway | None = None,
-    load_demo_data: bool = True,
+    load_demo_data: bool = False,
 ) -> FastAPI:
     app = FastAPI(
         title="NodeFlow Core Intelligence API",
@@ -39,8 +38,8 @@ def create_app(
         description="Shared project brain, impact analysis, context propagation, messaging, and onboarding.",
     )
     container = build_container(repository, gateway)
-    if load_demo_data and isinstance(container.repository, InMemoryProjectRepository):
-        seed_demo(container.repository)
+    # Application startup never inserts showcase data. Test code may inject its
+    # isolated fixtures directly into an in-memory repository when needed.
     app.state.container = container
     app.state.platform_store = PlatformStore()
     app.state.session_codec = SessionCodec()

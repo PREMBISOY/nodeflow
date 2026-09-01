@@ -1,6 +1,7 @@
 # Golden Demo
 
-The development server loads stable UUIDs from `backend/app/core/demo_data.py`.
+This is a test-only fixture stored in `backend/tests/fixtures/demo_data.py`.
+The development and production servers start empty and never load it.
 
 - Project: `10000000-0000-0000-0000-000000000001`
 - Recommendations API: `20000000-0000-0000-0000-000000000002`
