@@ -83,8 +83,12 @@ class PlatformStore:
         user = User(name=name or login, email=safe_email, auth_subject=subject)
         self.users[user.id] = user; self.by_email[safe_email] = (user.id, ""); self.github_users[subject] = user.id; return user
     def create_team(self, user: User, name: str) -> Team:
-        code = "NF-" + "".join(ch for ch in name.upper() if ch.isalnum())[:4].ljust(2, "X") + "-" + secrets.token_hex(2).upper()
-        team = Team(name=name, team_code=code, created_by=user.id); self.teams[team.id] = team; self.memberships[(user.id, team.id)] = Membership(team_id=team.id, user_id=user.id, role="OWNER"); return team
+        normalized_name = " ".join(name.split())
+        if not normalized_name: raise ValueError("Team name is required")
+        existing = next((team for team in self.teams.values() if team.created_by == user.id and team.name.casefold() == normalized_name.casefold()), None)
+        if existing: return existing
+        code = "NF-" + "".join(ch for ch in normalized_name.upper() if ch.isalnum())[:4].ljust(2, "X") + "-" + secrets.token_hex(2).upper()
+        team = Team(name=normalized_name, team_code=code, created_by=user.id); self.teams[team.id] = team; self.memberships[(user.id, team.id)] = Membership(team_id=team.id, user_id=user.id, role="OWNER"); return team
     def join(self, user: User, code: str) -> Team:
         team = next((team for team in self.teams.values() if team.team_code == code.upper()), None)
         if not team: raise LookupError("Team not found")
@@ -157,7 +161,11 @@ class SqlPlatformStore:
         if not row: raise KeyError(user_id)
         return self._user(row)
     def create_team(self, user: User, name: str) -> Team:
-        team=Team(name=name,team_code="NF-"+"".join(c for c in name.upper() if c.isalnum())[:4].ljust(2,"X")+"-"+secrets.token_hex(2).upper(),created_by=user.id)
+        normalized_name = " ".join(name.split())
+        if not normalized_name: raise ValueError("Team name is required")
+        row = self.session.execute(text("select id,name,team_code,created_by,created_at from teams where created_by=:owner and lower(btrim(name))=lower(:name) order by created_at limit 1"), {"owner":str(user.id),"name":normalized_name}).first()
+        if row: return self._team(row)
+        team=Team(name=normalized_name,team_code="NF-"+"".join(c for c in normalized_name.upper() if c.isalnum())[:4].ljust(2,"X")+"-"+secrets.token_hex(2).upper(),created_by=user.id)
         self.session.execute(text("insert into teams (id,name,team_code,created_by,created_at,updated_at) values (:id,:name,:code,:owner,:at,:at)"), {"id":str(team.id),"name":team.name,"code":team.team_code,"owner":str(user.id),"at":team.created_at})
         self.session.execute(text("insert into team_members (id,team_id,user_id,role,joined_at) values (:id,:team,:user,'OWNER',:at)"), {"id":str(uuid4()),"team":str(team.id),"user":str(user.id),"at":team.created_at}); self.session.commit(); return team
     def join(self, user: User, code: str) -> Team:
@@ -348,7 +356,9 @@ def switch_team(payload: ActiveTeamRequest, request: Request, authorization: str
     user, _, _ = current(request, authorization); platform(request).require_member(user.id, payload.team_id); return envelope({"access_token": codec(request).issue(user.id, payload.team_id), "active_team_id": payload.team_id})
 @router.post("/teams", status_code=201)
 def create_team(payload: TeamCreateRequest, request: Request, authorization: str | None = Header(default=None)):
-    user, _, _ = current(request, authorization); team = platform(request).create_team(user, payload.name)
+    user, _, _ = current(request, authorization)
+    try: team = platform(request).create_team(user, payload.name)
+    except ValueError as exc: raise HTTPException(422, str(exc))
     return envelope({**team.model_dump(mode="json"), "access_token": codec(request).issue(user.id, team.id), "active_team_id": team.id})
 @router.get("/teams")
 def teams(request: Request, authorization: str | None = Header(default=None)):

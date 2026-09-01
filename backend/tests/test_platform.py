@@ -18,6 +18,14 @@ def test_registration_team_join_and_active_team_switching():
     active=switched.json()['data']['access_token']; me=api.get('/api/v1/me', headers=auth(active)).json()['data']
     assert {item['id'] for item in me['teams']} == {team['id'], second['id']} and me['active_team_id'] == team['id']
 
+def test_team_creation_is_idempotent_for_the_same_owner_and_name():
+    api=client(); owner=register(api, 'Prem', 'prem@example.com')
+    first=api.post('/api/v1/teams', json={'name':'MatrixByte'}, headers=auth(owner)); second=api.post('/api/v1/teams', json={'name':'  matrixbyte  '}, headers=auth(owner))
+    assert first.status_code == 201 and second.status_code == 201
+    assert second.json()['data']['id'] == first.json()['data']['id']
+    teams=api.get('/api/v1/teams', headers=auth(owner)).json()['data']
+    assert [team['name'] for team in teams] == ['MatrixByte']
+
 def test_join_is_idempotent_and_non_members_cannot_read_members():
     api=client(); owner=register(api, 'Prem', 'prem@example.com'); team=api.post('/api/v1/teams', json={'name':'HackVerse'}, headers=auth(owner)).json()['data']
     guest=register(api, 'Aarya', 'aarya@example.com'); joined=api.post('/api/v1/teams/join', json={'team_code':team['team_code']}, headers=auth(guest)); assert joined.status_code == 200
