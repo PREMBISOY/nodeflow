@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from uuid import UUID
+
 from fastapi.testclient import TestClient
 
 from tests.fixtures.demo_data import DEMO_IDS
 from app.main import create_app
+from app.services.team_scope import ActiveTeamProjectAccess
 
 
 def build_client() -> TestClient:
@@ -272,3 +275,64 @@ def test_failures_use_standard_response_shape():
             "message": "Project '99999999-9999-9999-9999-999999999999' was not found",
         },
     }
+
+
+def test_product_workflow_routes_require_the_active_teams_authorized_project_when_configured():
+    app = create_app()
+    app.state.team_project_resolver = lambda _request: ActiveTeamProjectAccess(
+        user_id="prem", active_team_id=DEMO_IDS["project"], authorized_project_ids=frozenset(),
+    )
+    client = TestClient(app)
+
+    response = client.get(f"/api/v1/projects/{DEMO_IDS['project']}/collaboration")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Project is outside the active team scope"
+
+
+def test_product_workflow_routes_accept_authorized_project_from_active_team_resolver():
+    app = create_app()
+    app.state.team_project_resolver = lambda _request: ActiveTeamProjectAccess(
+        user_id="prem", active_team_id=DEMO_IDS["project"],
+        authorized_project_ids=frozenset({DEMO_IDS["project"]}),
+    )
+    client = TestClient(app)
+
+    response = client.get(f"/api/v1/projects/{DEMO_IDS['project']}/git/activity")
+
+    assert response.status_code == 200
+    assert response.json()["data"] == []
+
+
+def test_cross_team_scope_rejects_collaboration_git_approval_and_agent_workflow_access():
+    app = create_app()
+    other_team_project = UUID("90000000-0000-0000-0000-000000000001")
+    app.state.team_project_resolver = lambda _request: ActiveTeamProjectAccess(
+        user_id="other-team-user", active_team_id=UUID("80000000-0000-0000-0000-000000000001"),
+        authorized_project_ids=frozenset({other_team_project}),
+    )
+    client = TestClient(app)
+    project_id = str(DEMO_IDS["project"])
+
+    collaboration = client.get(f"/api/v1/projects/{project_id}/collaboration")
+    git_activity = client.get(f"/api/v1/projects/{project_id}/git/activity")
+    git_event = client.post(
+        "/api/v1/integrations/github/events",
+        json={"project_id": project_id, "event_type": "commit", "repository": "PREMBISOY/nodeflow",
+              "summary": "Foreign team commit"},
+    )
+    generic_git_event = client.post(
+        "/api/v1/events",
+        json={"project_id": project_id, "event_type": "github_commit",
+              "summary": "Foreign team bypass attempt", "payload": {"provider": "github"}},
+    )
+    approval = client.post(
+        f"/api/v1/projects/{project_id}/collaboration/approvals/{UUID('70000000-0000-0000-0000-000000000001')}",
+        json={"project_id": project_id, "decision": "approved", "actor_name": "Other user"},
+    )
+    agent_context = client.get(f"/api/v1/agents/{DEMO_IDS['frontend_agent']}/context")
+    agent_updates = client.get(f"/api/v1/agents/{DEMO_IDS['frontend_agent']}/updates")
+
+    for response in [collaboration, git_activity, git_event, generic_git_event, approval, agent_context, agent_updates]:
+        assert response.status_code == 403
+        assert response.json()["detail"] == "Project is outside the active team scope"

@@ -53,6 +53,10 @@ GitHub remains the source of truth for source code. NodeFlow stores a compact ev
 }
 ```
 
+## Active team scope
+
+Collaboration, Git, and onboarding product workflows are scoped by the authenticated caller's active team and authorized projects. See [team-aware-workflows.md](team-aware-workflows.md) for the middleware contract. In production, requests without that context fail closed; demo mode is the sole exception.
+
 Pull-request events may include an `action`. `opened` and `synchronized` default to `review_required` and require approval unless `requires_approval` is explicitly set. A merged PR receives the `merged` flow stage. Read normalized history from `GET /projects/{id}/git/activity`.
 
 ## Active team scope
