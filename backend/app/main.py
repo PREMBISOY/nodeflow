@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router
 from app.core.container import build_container
@@ -40,6 +42,17 @@ def create_app(
     @app.get("/health")
     def health():
         return {"success": True, "data": {"status": "ok"}, "error": None}
+
+    frontend_dir = Path(__file__).resolve().parent / "static"
+    if frontend_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=frontend_dir / "assets"), name="frontend-assets")
+
+        @app.get("/{path:path}", include_in_schema=False)
+        def frontend(path: str):
+            requested_file = frontend_dir / path
+            if path and requested_file.is_file():
+                return FileResponse(requested_file)
+            return FileResponse(frontend_dir / "index.html")
 
     @app.exception_handler(EntityNotFoundError)
     async def not_found_handler(_request: Request, exc: EntityNotFoundError):
