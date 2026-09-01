@@ -16,4 +16,4 @@ COPY backend/migrations ./migrations
 COPY --from=frontend-builder /build/frontend/dist ./app/static
 
 ENV PYTHONUNBUFFERED=1
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "python -m app.migrate && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
