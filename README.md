@@ -11,6 +11,12 @@ This repository currently implements the core intelligence subsystem:
 - role-aware new-member onboarding
 - Prem-owned `/api/v1` contracts and golden demo data
 
+It also includes the authenticated team platform that scopes each project to an
+active team. A team creator is its leader (`OWNER`) and can add registered
+participants or remove participants from the dashboard; every team member can
+view the member name, ID, and role list. See the [API reference](docs/api.md)
+and [team workflow guide](docs/team-aware-workflows.md).
+
 ## Run locally
 
 ```powershell
