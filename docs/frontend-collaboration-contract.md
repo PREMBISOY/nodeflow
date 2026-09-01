@@ -12,6 +12,9 @@ This is Namish's handoff to the frontend/visualization owner. It specifies produ
 | See delivered impact | `GET /api/v1/agents/{id}/updates` | subject, content, related_component_ids, relevance_score, read |
 | Let an agent acknowledge work | `POST /api/v1/agents/{id}/messages` | recipient_agent_id, message_type, subject, content, related_components |
 | Brief a new member | `POST /api/v1/onboarding` | role, major_components, relevant_tasks, recent_changes, briefing |
+| View team members | `GET /api/v1/teams/{teamId}/members` | id, name, role |
+| Add participant (creator only) | `POST /api/v1/teams/{teamId}/members` | registered participant email |
+| Remove participant (creator only) | `DELETE /api/v1/teams/{teamId}/members/{userId}` | participant user ID |
 
 All APIs use `{ success, data, error }`. Show a recoverable error state whenever `success` is false or a request fails.
 
@@ -23,6 +26,10 @@ All APIs use `{ success, data, error }`. Show a recoverable error state whenever
 4. **Context handoff** — a scope selector (`my_work`, `team`, `related`, `project`) and optional task selection. Display the returned `requested_task` separately from the broader task list.
 5. **Human attention** — render `waiting` items as pending information only. `waiting_approval` must not show an approve/reject control until an approval mutation API is delivered by the workflow/persistence integration.
 6. **Onboarding** — role selection, scope selection, briefing, recommended starting points, and relevant architecture/tasks/changes.
+7. **Team Members** — render each participant's name, ID, and role. The team
+   creator may add a registered account by email and remove a non-creator
+   participant. Refetch the list after either action; render a permission error
+   instead of inferring leadership from the UI.
 
 ## Empty, loading, and error behavior
 
@@ -45,3 +52,5 @@ All APIs use `{ success, data, error }`. Show a recoverable error state whenever
 - The UI must not infer permissions, mutate task status, approve work, or create graph edges. Those require contracts from the permissions, persistence, and workflow owners.
 - GitHub authentication, webhook registration, signature validation, and repository synchronization belong to the external integration layer. The current product API accepts normalized GitHub events only.
 - The dashboard's graph rendering remains with the frontend/visualization owner; this contract supplies the interaction and state requirements.
+- Cross-origin dashboard clients may use `DELETE` for participant removal; the
+  API's configured CORS policy permits this method for trusted origins.

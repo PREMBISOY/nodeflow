@@ -30,6 +30,13 @@ Use `GET /api/v1/projects/{id}/context` and the agent context/update endpoints. 
 
 Read-only Project Brain views are available for state, architecture, component context, decisions, and memory. Ownership of their mutation APIs and persistence remains unchanged.
 
+The dashboard can also use the platform's team endpoints. `GET
+/api/v1/teams/{teamId}/members` returns the participant user ID, name, and
+role to a team member. Participant mutations are deliberately platform-owned:
+only the team creator can add a registered account by email or remove a
+non-creator participant. The dashboard must rely on the API's authorization
+response rather than treating client state as a permission source.
+
 ## Product workflow integration (Namish)
 
 Use `POST /api/v1/onboarding` with `role` and `scope`, and `POST /api/v1/agents/{id}/messages` for agent acknowledgements. Supported scopes are `my_work`, `team`, `related`, and `project`.

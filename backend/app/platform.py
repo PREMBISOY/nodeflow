@@ -41,6 +41,7 @@ class RegisterRequest(BaseModel): name: str; email: str = Field(pattern=r"^[^@\s
 class LoginRequest(BaseModel): email: str; password: str
 class TeamCreateRequest(BaseModel): name: str
 class JoinTeamRequest(BaseModel): team_code: str
+class TeamMemberAddRequest(BaseModel): email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 class ActiveTeamRequest(BaseModel): team_id: UUID
 class ProjectCreateRequest(BaseModel): name: str; purpose: str; technology_stack: list[str] = Field(default_factory=list)
 class GitHubRepositoryConnectRequest(BaseModel):
@@ -100,8 +101,13 @@ class PlatformStore:
         return membership
     def teams_for(self, user_id: UUID) -> list[Team]: return [self.teams[key[1]] for key in self.memberships if key[0] == user_id]
     def get_user(self, user_id: UUID) -> User: return self.users[user_id]
+    def user_for_email(self, email: str) -> User | None:
+        entry = self.by_email.get(email.lower())
+        return self.users[entry[0]] if entry else None
     def get_team(self, team_id: UUID) -> Team: return self.teams[team_id]
     def members_for(self, team_id: UUID) -> list[Membership]: return [m for m in self.memberships.values() if m.team_id == team_id]
+    def add_member(self, team_id: UUID, user_id: UUID) -> Membership:
+        return self.memberships.setdefault((user_id, team_id), Membership(team_id=team_id, user_id=user_id))
     def leave(self, user_id: UUID, team_id: UUID) -> None: del self.memberships[(user_id, team_id)]
     def revoke(self, jti: str) -> None: self.revoked.add(jti)
     def is_revoked(self, jti: str) -> bool: return jti in self.revoked
@@ -161,6 +167,9 @@ class SqlPlatformStore:
         row=self.session.execute(text("select id,name,email,auth_subject,created_at from users where id=:id"), {"id":str(user_id)}).first()
         if not row: raise KeyError(user_id)
         return self._user(row)
+    def user_for_email(self, email: str) -> User | None:
+        row=self.session.execute(text("select id,name,email,auth_subject,created_at from users where email=:email"), {"email":email.lower()}).first()
+        return self._user(row) if row else None
     def create_team(self, user: User, name: str) -> Team:
         normalized_name = " ".join(name.split())
         if not normalized_name: raise ValueError("Team name is required")
@@ -183,6 +192,10 @@ class SqlPlatformStore:
         if not row: raise KeyError(team_id)
         return self._team(row)
     def members_for(self,team_id: UUID) -> list[Membership]: return [self._membership(row) for row in self.session.execute(text("select id,team_id,user_id,role,joined_at from team_members where team_id=:team"), {"team":str(team_id)})]
+    def add_member(self, team_id: UUID, user_id: UUID) -> Membership:
+        self.session.execute(text("insert into team_members (id,team_id,user_id,role,joined_at) values (:id,:team,:user,'MEMBER',now()) on conflict (team_id,user_id) do nothing"), {"id":str(uuid4()),"team":str(team_id),"user":str(user_id)})
+        self.session.commit()
+        return self.require_member(user_id, team_id)
     def leave(self,user_id: UUID,team_id: UUID) -> None: self.session.execute(text("delete from team_members where user_id=:user and team_id=:team"), {"user":str(user_id),"team":str(team_id)}); self.session.commit()
     def revoke(self,jti: str) -> None: self.session.execute(text("insert into auth_sessions (id,user_id,jti,revoked_at,created_at,expires_at) values (:id,null,:jti,now(),now(),now()) on conflict (jti) do update set revoked_at=now()"), {"id":str(uuid4()),"jti":jti}); self.session.commit()
     def is_revoked(self,jti: str) -> bool: return self.session.execute(text("select 1 from auth_sessions where jti=:jti and revoked_at is not null"), {"jti":jti}).first() is not None
@@ -391,7 +404,45 @@ def members(team_id: UUID, request: Request, authorization: str | None = Header(
     user, _, _ = current(request, authorization)
     try: platform(request).require_member(user.id, team_id)
     except PermissionError: raise HTTPException(403, "Forbidden")
-    return envelope(platform(request).members_for(team_id))
+    return envelope([{
+        # `id` is the participant/user identifier consumed by the dashboard.
+        # Keep `user_id` during the API transition for existing clients.
+        "id": membership.user_id,
+        "user_id": membership.user_id,
+        "name": platform(request).get_user(membership.user_id).name,
+        "email": platform(request).get_user(membership.user_id).email,
+        "role": membership.role,
+        "joined_at": membership.joined_at,
+    } for membership in platform(request).members_for(team_id)])
+
+def require_team_leader(request: Request, user: User, team_id: UUID) -> Team:
+    try:
+        platform(request).require_member(user.id, team_id)
+        team = platform(request).get_team(team_id)
+    except (KeyError, PermissionError):
+        raise HTTPException(404, "Team not found")
+    if team.created_by != user.id:
+        raise HTTPException(403, "Only the team creator can manage participants")
+    return team
+
+@router.post("/teams/{team_id}/members", status_code=201)
+def add_team_member(team_id: UUID, payload: TeamMemberAddRequest, request: Request, authorization: str | None = Header(default=None)):
+    user, _, _ = current(request, authorization)
+    require_team_leader(request, user, team_id)
+    participant = platform(request).user_for_email(payload.email)
+    if not participant: raise HTTPException(404, "No NodeFlow account exists for that email")
+    membership = platform(request).add_member(team_id, participant.id)
+    return envelope({"id": membership.user_id, "user_id": membership.user_id, "name": participant.name, "email": participant.email, "role": membership.role, "joined_at": membership.joined_at})
+
+@router.delete("/teams/{team_id}/members/{participant_id}")
+def remove_team_member(team_id: UUID, participant_id: UUID, request: Request, authorization: str | None = Header(default=None)):
+    user, _, _ = current(request, authorization)
+    require_team_leader(request, user, team_id)
+    if participant_id == user.id: raise HTTPException(409, "The team creator cannot be removed")
+    try: platform(request).require_member(participant_id, team_id)
+    except PermissionError: raise HTTPException(404, "Participant not found")
+    platform(request).leave(participant_id, team_id)
+    return envelope({"removed": True, "user_id": participant_id})
 
 def active_team_for(request: Request, team_id: UUID, authorization: str | None):
     user, active, _ = current(request, authorization)

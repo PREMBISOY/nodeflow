@@ -32,6 +32,30 @@ def test_join_is_idempotent_and_non_members_cannot_read_members():
     assert api.post('/api/v1/teams/join', json={'team_code':team['team_code']}, headers=auth(guest)).status_code == 200
     outsider=register(api, 'Sunal', 'sunal@example.com'); assert api.get(f"/api/v1/teams/{team['id']}/members", headers=auth(outsider)).status_code == 403
 
+def test_team_creator_can_manage_participants_and_membership_data_is_safe():
+    api=client(); owner=register(api, 'Prem', 'prem@example.com')
+    team=api.post('/api/v1/teams', json={'name':'HackVerse'}, headers=auth(owner)).json()['data']
+    participant=register(api, 'Aarya', 'aarya@example.com')
+    added=api.post(f"/api/v1/teams/{team['id']}/members", json={'email':'aarya@example.com'}, headers=auth(team['access_token']))
+    assert added.status_code == 201
+    assert added.json()['data']['name'] == 'Aarya' and added.json()['data']['role'] == 'MEMBER'
+    assert added.json()['data']['id'] == added.json()['data']['user_id']
+    members=api.get(f"/api/v1/teams/{team['id']}/members", headers=auth(team['access_token']))
+    assert {(item['name'], item['role']) for item in members.json()['data']} == {('Prem', 'OWNER'), ('Aarya', 'MEMBER')}
+    assert api.post(f"/api/v1/teams/{team['id']}/members", json={'email':'prem@example.com'}, headers=auth(participant)).status_code == 403
+    assert api.delete(f"/api/v1/teams/{team['id']}/members/{team['created_by']}", headers=auth(team['access_token'])).status_code == 409
+    assert api.delete(f"/api/v1/teams/{team['id']}/members/{added.json()['data']['user_id']}", headers=auth(team['access_token'])).status_code == 200
+    assert api.get(f"/api/v1/teams/{team['id']}/members", headers=auth(team['access_token'])).json()['data'][0]['name'] == 'Prem'
+
+def test_participant_management_allows_browser_delete_preflight():
+    api = client()
+    response = api.options(
+        '/api/v1/teams/00000000-0000-0000-0000-000000000001/members/00000000-0000-0000-0000-000000000002',
+        headers={'Origin': 'http://localhost:5173', 'Access-Control-Request-Method': 'DELETE'},
+    )
+    assert response.status_code == 200
+    assert 'DELETE' in response.headers['access-control-allow-methods']
+
 def test_member_can_create_and_list_only_their_team_projects():
     api=client(); owner=register(api, 'Prem', 'prem@example.com'); team=api.post('/api/v1/teams', json={'name':'HackVerse'}, headers=auth(owner)).json()['data']
     created=api.post(f"/api/v1/teams/{team['id']}/projects", json={'name':'NodeFlow','purpose':'Shared context','technology_stack':['FastAPI']}, headers=auth(team['access_token']))
