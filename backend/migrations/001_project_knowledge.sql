@@ -1,0 +1,20 @@
+-- PostgreSQL / Supabase persistence mapping for Prem's existing entity contracts.
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE TABLE projects (id uuid PRIMARY KEY, name varchar(200) NOT NULL, purpose text NOT NULL, technology_stack jsonb NOT NULL DEFAULT '[]', status varchar(40) NOT NULL DEFAULT 'active', created_at timestamptz NOT NULL);
+CREATE TABLE components (id uuid PRIMARY KEY, project_id uuid NOT NULL REFERENCES projects(id), name varchar(200) NOT NULL, description text NOT NULL DEFAULT '', kind varchar(80) NOT NULL DEFAULT 'service', owner_role varchar(100), tags jsonb NOT NULL DEFAULT '[]');
+CREATE TABLE agents (id uuid PRIMARY KEY, project_id uuid NOT NULL REFERENCES projects(id), name varchar(200) NOT NULL, role varchar(100) NOT NULL, model_provider varchar(100) NOT NULL DEFAULT 'unknown', component_ids jsonb NOT NULL DEFAULT '[]', current_task_ids jsonb NOT NULL DEFAULT '[]', capabilities jsonb NOT NULL DEFAULT '[]', active boolean NOT NULL DEFAULT true);
+CREATE TABLE relationships (id uuid PRIMARY KEY, project_id uuid NOT NULL REFERENCES projects(id), source_component_id uuid NOT NULL REFERENCES components(id), target_component_id uuid NOT NULL REFERENCES components(id), relationship_type varchar(80) NOT NULL DEFAULT 'depends_on', description text NOT NULL DEFAULT '');
+CREATE TABLE tasks (id uuid PRIMARY KEY, project_id uuid NOT NULL REFERENCES projects(id), title varchar(300) NOT NULL, status varchar(40) NOT NULL DEFAULT 'todo', component_ids jsonb NOT NULL DEFAULT '[]', assignee_agent_ids jsonb NOT NULL DEFAULT '[]', description text NOT NULL DEFAULT '');
+CREATE TABLE events (id uuid PRIMARY KEY, project_id uuid NOT NULL REFERENCES projects(id), event_type varchar(100) NOT NULL, actor_type varchar(40) NOT NULL, actor_id uuid, entity_id uuid, component_ids jsonb NOT NULL DEFAULT '[]', summary text NOT NULL, payload jsonb NOT NULL DEFAULT '{}', created_at timestamptz NOT NULL);
+CREATE TABLE decisions (id uuid PRIMARY KEY, project_id uuid NOT NULL REFERENCES projects(id), title varchar(300) NOT NULL, rationale text NOT NULL, component_ids jsonb NOT NULL DEFAULT '[]', status varchar(40) NOT NULL DEFAULT 'accepted', created_at timestamptz NOT NULL);
+CREATE TABLE memories (id uuid PRIMARY KEY, project_id uuid NOT NULL REFERENCES projects(id), content text NOT NULL, component_ids jsonb NOT NULL DEFAULT '[]', tags jsonb NOT NULL DEFAULT '[]', created_at timestamptz NOT NULL);
+CREATE TABLE changes (id uuid PRIMARY KEY, project_id uuid NOT NULL REFERENCES projects(id), component_id uuid NOT NULL REFERENCES components(id), summary text NOT NULL, change_type varchar(60) NOT NULL DEFAULT 'modified', source_ref text, created_at timestamptz NOT NULL);
+CREATE TABLE messages (id uuid PRIMARY KEY, project_id uuid NOT NULL REFERENCES projects(id), sender_agent_id uuid NOT NULL REFERENCES agents(id), recipient_agent_id uuid NOT NULL REFERENCES agents(id), message_type varchar(80) NOT NULL, subject varchar(300) NOT NULL, content text NOT NULL, related_component_ids jsonb NOT NULL DEFAULT '[]', created_at timestamptz NOT NULL);
+CREATE TABLE context_updates (id uuid PRIMARY KEY, project_id uuid NOT NULL REFERENCES projects(id), recipient_agent_id uuid NOT NULL REFERENCES agents(id), source_event_id uuid NOT NULL REFERENCES events(id), subject varchar(300) NOT NULL, content text NOT NULL, related_component_ids jsonb NOT NULL DEFAULT '[]', relevance_score double precision NOT NULL, created_at timestamptz NOT NULL, read boolean NOT NULL DEFAULT false);
+CREATE INDEX events_project_timestamp_idx ON events(project_id, created_at DESC);
+CREATE INDEX events_project_type_idx ON events(project_id, event_type);
+CREATE INDEX agents_project_idx ON agents(project_id);
+CREATE INDEX tasks_project_idx ON tasks(project_id);
+CREATE INDEX relationships_source_idx ON relationships(source_component_id);
+CREATE INDEX relationships_target_idx ON relationships(target_component_id);
+CREATE INDEX context_updates_recipient_idx ON context_updates(recipient_agent_id, created_at DESC);
