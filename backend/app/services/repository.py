@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from threading import Lock
 from typing import Protocol, TypeVar
 from uuid import UUID
 
@@ -32,15 +33,17 @@ class ProjectKnowledgeRepository(Protocol):
     def get_project(self, project_id: UUID) -> Project: ...
     def get_component(self, component_id: UUID) -> Component: ...
     def get_agent(self, agent_id: UUID) -> Agent: ...
+    def get_event(self, event_id: UUID) -> Event: ...
     def list_components(self, project_id: UUID) -> list[Component]: ...
     def list_relationships(self, project_id: UUID) -> list[Relationship]: ...
     def list_tasks(self, project_id: UUID) -> list[Task]: ...
     def list_agents(self, project_id: UUID) -> list[Agent]: ...
-    def list_events(self, project_id: UUID, limit: int = 25) -> list[Event]: ...
+    def list_events(self, project_id: UUID, limit: int | None = 25) -> list[Event]: ...
     def list_decisions(self, project_id: UUID) -> list[Decision]: ...
     def list_memories(self, project_id: UUID) -> list[Memory]: ...
     def list_changes(self, project_id: UUID, limit: int = 25) -> list[Change]: ...
     def add_event(self, event: Event) -> Event: ...
+    def record_approval_decision(self, event: Event) -> Event | None: ...
     def add_change(self, change: Change) -> Change: ...
     def add_message(self, message: Message) -> Message: ...
     def add_update(self, update: ContextUpdate) -> ContextUpdate: ...
@@ -66,6 +69,7 @@ class InMemoryProjectRepository:
         self.messages: dict[UUID, Message] = {}
         self.updates: dict[UUID, ContextUpdate] = {}
         self.agent_update_ids: dict[UUID, list[UUID]] = defaultdict(list)
+        self._approval_lock = Lock()
 
     @staticmethod
     def _require(store: dict[UUID, T], entity_id: UUID, entity: str) -> T:
@@ -87,6 +91,9 @@ class InMemoryProjectRepository:
     def get_agent(self, agent_id: UUID) -> Agent:
         return self._require(self.agents, agent_id, "Agent")
 
+    def get_event(self, event_id: UUID) -> Event:
+        return self._require(self.events, event_id, "Event")
+
     def list_components(self, project_id: UUID) -> list[Component]:
         return self._for_project(self.components, project_id)
 
@@ -99,7 +106,7 @@ class InMemoryProjectRepository:
     def list_agents(self, project_id: UUID) -> list[Agent]:
         return self._for_project(self.agents, project_id)
 
-    def list_events(self, project_id: UUID, limit: int = 25) -> list[Event]:
+    def list_events(self, project_id: UUID, limit: int | None = 25) -> list[Event]:
         items = self._for_project(self.events, project_id)
         return sorted(items, key=lambda item: item.created_at, reverse=True)[:limit]
 
@@ -116,6 +123,20 @@ class InMemoryProjectRepository:
     def add_event(self, event: Event) -> Event:
         self.events[event.id] = event
         return event
+
+    def record_approval_decision(self, event: Event) -> Event | None:
+        approval_event_id = event.payload.get("approval_event_id")
+        with self._approval_lock:
+            duplicate = any(
+                item.project_id == event.project_id
+                and item.event_type == "collaboration_approval_decision"
+                and item.payload.get("approval_event_id") == approval_event_id
+                for item in self.events.values()
+            )
+            if duplicate:
+                return None
+            self.events[event.id] = event
+            return event
 
     def add_change(self, change: Change) -> Change:
         self.changes[change.id] = change

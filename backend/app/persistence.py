@@ -13,6 +13,7 @@ from uuid import UUID
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, Uuid, create_engine, select
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.types import JSON
 
@@ -212,15 +213,26 @@ class SqlAlchemyProjectRepository:
     def get_project(self, project_id: UUID) -> Project: return self._get(ProjectRow, Project, project_id)
     def get_component(self, component_id: UUID) -> Component: return self._get(ComponentRow, Component, component_id)
     def get_agent(self, agent_id: UUID) -> Agent: return self._get(AgentRow, Agent, agent_id)
+    def get_event(self, event_id: UUID) -> Event: return self._get(EventRow, Event, event_id)
     def list_components(self, project_id: UUID) -> list[Component]: return self._list(ComponentRow, Component, project_id)
     def list_relationships(self, project_id: UUID) -> list[Relationship]: return self._list(RelationshipRow, Relationship, project_id)
     def list_tasks(self, project_id: UUID) -> list[Task]: return self._list(TaskRow, Task, project_id)
     def list_agents(self, project_id: UUID) -> list[Agent]: return self._list(AgentRow, Agent, project_id)
-    def list_events(self, project_id: UUID, limit: int = 25) -> list[Event]: return self._list(EventRow, Event, project_id, EventRow.created_at, limit)
+    def list_events(self, project_id: UUID, limit: int | None = 25) -> list[Event]: return self._list(EventRow, Event, project_id, EventRow.created_at, limit)
     def list_decisions(self, project_id: UUID) -> list[Decision]: return self._list(DecisionRow, Decision, project_id)
     def list_memories(self, project_id: UUID) -> list[Memory]: return self._list(MemoryRow, Memory, project_id)
     def list_changes(self, project_id: UUID, limit: int = 25) -> list[Change]: return self._list(ChangeRow, Change, project_id, ChangeRow.created_at, limit)
     def add_event(self, event: Event) -> Event: return self._add(event, EventRow, Event)
+    def record_approval_decision(self, event: Event) -> Event | None:
+        row = EventRow(**self._data(event))
+        self.session.add(row)
+        try:
+            self.session.commit()
+        except IntegrityError:
+            self.session.rollback()
+            return None
+        self.session.refresh(row)
+        return self._entity(row, Event)
     def add_change(self, change: Change) -> Change: return self._add(change, ChangeRow, Change)
     def add_message(self, message: Message) -> Message: return self._add(message, MessageRow, Message)
     def add_update(self, update: ContextUpdate) -> ContextUpdate: return self._add(update, ContextUpdateRow, ContextUpdate)

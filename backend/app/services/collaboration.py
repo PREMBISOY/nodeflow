@@ -23,11 +23,12 @@ class CollaborationService:
             {"kind": "task", "id": str(task.id), "title": task.title, "status": task.status}
             for task in context.tasks if task.status in {"todo", "blocked", "waiting_approval"}
         ]
-        approval_statuses = self._approval_statuses(context.recent_events)
+        approval_events = self.repository.list_events(project_id, limit=None)
+        approval_statuses = self._approval_statuses(approval_events)
         approvals = [
             {"id": event.id, "title": event.summary, "status": approval_statuses.get(event.id, "waiting_approval"),
              "component_ids": event.component_ids}
-            for event in context.recent_events if event.payload.get("requires_approval")
+            for event in approval_events if event.payload.get("requires_approval")
         ]
         waiting.extend(
             {"kind": "approval", "id": str(item["id"]), "title": item["title"], "status": item["status"]}
@@ -48,13 +49,12 @@ class CollaborationService:
         }
 
     def decide_approval(self, approval_event_id: UUID, request: ApprovalDecisionCreate) -> Event:
-        source = next((event for event in self.repository.list_events(request.project_id, limit=250)
-                       if event.id == approval_event_id), None)
-        if source is None or not source.payload.get("requires_approval"):
+        try:
+            source = self.repository.get_event(approval_event_id)
+        except LookupError:
+            source = None
+        if source is None or source.project_id != request.project_id or not source.payload.get("requires_approval"):
             raise LookupError("Approval request was not found")
-        status = self._approval_statuses(self.repository.list_events(request.project_id, limit=250)).get(source.id)
-        if status:
-            raise ValueError(f"Approval request has already been {status}")
         decision = Event(
             project_id=request.project_id,
             event_type="collaboration_approval_decision",
@@ -65,7 +65,10 @@ class CollaborationService:
             payload={"approval_event_id": str(source.id), "approval_status": request.decision,
                      "actor_name": request.actor_name, "comment": request.comment},
         )
-        return self.repository.add_event(decision)
+        recorded = self.repository.record_approval_decision(decision)
+        if recorded is None:
+            raise ValueError("Approval request has already been decided")
+        return recorded
 
     @staticmethod
     def _approval_statuses(events):
