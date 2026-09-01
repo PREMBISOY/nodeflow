@@ -16,6 +16,8 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, Field
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 
 def utc_now() -> datetime: return datetime.now(timezone.utc)
@@ -70,6 +72,58 @@ class PlatformStore:
         if not membership: raise PermissionError("Not a member of the active team")
         return membership
     def teams_for(self, user_id: UUID) -> list[Team]: return [self.teams[key[1]] for key in self.memberships if key[0] == user_id]
+    def get_user(self, user_id: UUID) -> User: return self.users[user_id]
+    def get_team(self, team_id: UUID) -> Team: return self.teams[team_id]
+    def members_for(self, team_id: UUID) -> list[Membership]: return [m for m in self.memberships.values() if m.team_id == team_id]
+    def leave(self, user_id: UUID, team_id: UUID) -> None: del self.memberships[(user_id, team_id)]
+    def revoke(self, jti: str) -> None: self.revoked.add(jti)
+    def is_revoked(self, jti: str) -> bool: return jti in self.revoked
+
+
+class SqlPlatformStore:
+    """Production store mapped directly to the Supabase schema via DATABASE_URL."""
+    def __init__(self, session: Session) -> None: self.session = session
+    @staticmethod
+    def _user(row) -> User: return User(id=row.id, name=row.name, email=row.email, auth_subject=row.auth_subject, created_at=row.created_at)
+    @staticmethod
+    def _team(row) -> Team: return Team(id=row.id, name=row.name, team_code=row.team_code, created_by=row.created_by, created_at=row.created_at)
+    @staticmethod
+    def _membership(row) -> Membership: return Membership(id=row.id, team_id=row.team_id, user_id=row.user_id, role=row.role, joined_at=row.joined_at)
+    def register(self, request: RegisterRequest) -> User:
+        email=request.email.lower(); existing=self.session.execute(text("select id from users where email=:email"), {"email":email}).first()
+        if existing: raise ValueError("An account with this email already exists")
+        user=User(name=request.name,email=email,auth_subject=str(uuid4())); password_hash=PlatformStore._hash(request.password)
+        self.session.execute(text("insert into users (id,name,email,auth_subject,created_at,updated_at) values (:id,:name,:email,:subject,:created,:created)"), {"id":str(user.id),"name":user.name,"email":user.email,"subject":user.auth_subject,"created":user.created_at})
+        self.session.execute(text("insert into user_credentials (user_id,password_hash,updated_at) values (:id,:hash,:at)"), {"id":str(user.id),"hash":password_hash,"at":user.created_at}); self.session.commit(); return user
+    def login(self, request: LoginRequest) -> User:
+        row=self.session.execute(text("select u.id,u.name,u.email,u.auth_subject,u.created_at,c.password_hash from users u join user_credentials c on c.user_id=u.id where u.email=:email"), {"email":request.email.lower()}).first()
+        if not row or not PlatformStore._verify(request.password,row.password_hash): raise PermissionError("Invalid email or password")
+        return self._user(row)
+    def get_user(self, user_id: UUID) -> User:
+        row=self.session.execute(text("select id,name,email,auth_subject,created_at from users where id=:id"), {"id":str(user_id)}).first()
+        if not row: raise KeyError(user_id)
+        return self._user(row)
+    def create_team(self, user: User, name: str) -> Team:
+        team=Team(name=name,team_code="NF-"+"".join(c for c in name.upper() if c.isalnum())[:4].ljust(2,"X")+"-"+secrets.token_hex(2).upper(),created_by=user.id)
+        self.session.execute(text("insert into teams (id,name,team_code,created_by,created_at,updated_at) values (:id,:name,:code,:owner,:at,:at)"), {"id":str(team.id),"name":team.name,"code":team.team_code,"owner":str(user.id),"at":team.created_at})
+        self.session.execute(text("insert into team_members (id,team_id,user_id,role,joined_at) values (:id,:team,:user,'OWNER',:at)"), {"id":str(uuid4()),"team":str(team.id),"user":str(user.id),"at":team.created_at}); self.session.commit(); return team
+    def join(self, user: User, code: str) -> Team:
+        row=self.session.execute(text("select id,name,team_code,created_by,created_at from teams where team_code=:code"), {"code":code.upper()}).first()
+        if not row: raise LookupError("Team not found")
+        team=self._team(row); self.session.execute(text("insert into team_members (id,team_id,user_id,role,joined_at) values (:id,:team,:user,'MEMBER',now()) on conflict (team_id,user_id) do nothing"), {"id":str(uuid4()),"team":str(team.id),"user":str(user.id)}); self.session.commit(); return team
+    def require_member(self, user_id: UUID, team_id: UUID) -> Membership:
+        row=self.session.execute(text("select id,team_id,user_id,role,joined_at from team_members where user_id=:user and team_id=:team"), {"user":str(user_id),"team":str(team_id)}).first()
+        if not row: raise PermissionError("Not a member of the active team")
+        return self._membership(row)
+    def teams_for(self,user_id: UUID) -> list[Team]: return [self._team(row) for row in self.session.execute(text("select t.id,t.name,t.team_code,t.created_by,t.created_at from teams t join team_members m on m.team_id=t.id where m.user_id=:user order by t.created_at"), {"user":str(user_id)})]
+    def get_team(self,team_id: UUID) -> Team:
+        row=self.session.execute(text("select id,name,team_code,created_by,created_at from teams where id=:id"), {"id":str(team_id)}).first()
+        if not row: raise KeyError(team_id)
+        return self._team(row)
+    def members_for(self,team_id: UUID) -> list[Membership]: return [self._membership(row) for row in self.session.execute(text("select id,team_id,user_id,role,joined_at from team_members where team_id=:team"), {"team":str(team_id)})]
+    def leave(self,user_id: UUID,team_id: UUID) -> None: self.session.execute(text("delete from team_members where user_id=:user and team_id=:team"), {"user":str(user_id),"team":str(team_id)}); self.session.commit()
+    def revoke(self,jti: str) -> None: self.session.execute(text("insert into auth_sessions (id,user_id,jti,revoked_at,created_at,expires_at) values (:id,null,:jti,now(),now(),now()) on conflict (jti) do update set revoked_at=now()"), {"id":str(uuid4()),"jti":jti}); self.session.commit()
+    def is_revoked(self,jti: str) -> bool: return self.session.execute(text("select 1 from auth_sessions where jti=:jti and revoked_at is not null"), {"jti":jti}).first() is not None
 
 
 class SessionCodec:
@@ -86,16 +140,16 @@ class SessionCodec:
 
 
 router = APIRouter(prefix="/api/v1")
-def platform(request: Request) -> PlatformStore: return request.app.state.platform_store
+def platform(request: Request): return request.app.state.platform_store
 def codec(request: Request) -> SessionCodec: return request.app.state.session_codec
 def envelope(data): return {"success": True, "data": data, "error": None}
 def token_from(authorization: str | None) -> str:
     if not authorization or not authorization.startswith("Bearer "): raise HTTPException(401, "Authentication required")
     return authorization.removeprefix("Bearer ")
 def current(request: Request, authorization: str | None = Header(default=None)) -> tuple[User, UUID | None, dict]:
-    try: data = codec(request).read(token_from(authorization)); user = platform(request).users[UUID(data["sub"])]
+    try: data = codec(request).read(token_from(authorization)); user = platform(request).get_user(UUID(data["sub"]))
     except (ValueError, KeyError, PermissionError): raise HTTPException(401, "Invalid session")
-    if data["jti"] in platform(request).revoked: raise HTTPException(401, "Session revoked")
+    if platform(request).is_revoked(data["jti"]): raise HTTPException(401, "Session revoked")
     return user, UUID(data["team"]) if data.get("team") else None, data
 
 @router.post("/auth/register", status_code=201)
@@ -111,7 +165,7 @@ def login(payload: LoginRequest, request: Request):
     return envelope({"user": user, "access_token": codec(request).issue(user.id, active), "token_type": "bearer"})
 @router.post("/auth/logout")
 def logout(request: Request, authorization: str | None = Header(default=None)):
-    _user, _team, data = current(request, authorization); platform(request).revoked.add(data["jti"]); return envelope({"logged_out": True})
+    _user, _team, data = current(request, authorization); platform(request).revoke(data["jti"]); return envelope({"logged_out": True})
 @router.get("/me")
 def me(request: Request, authorization: str | None = Header(default=None)):
     user, active, _ = current(request, authorization); return envelope({"user": user, "teams": platform(request).teams_for(user.id), "active_team_id": active})
@@ -127,7 +181,7 @@ def teams(request: Request, authorization: str | None = Header(default=None)):
 @router.get("/teams/{team_id}")
 def get_team(team_id: UUID, request: Request, authorization: str | None = Header(default=None)):
     user, _, _ = current(request, authorization)
-    try: platform(request).require_member(user.id, team_id); return envelope(platform(request).teams[team_id])
+    try: platform(request).require_member(user.id, team_id); return envelope(platform(request).get_team(team_id))
     except (KeyError, PermissionError): raise HTTPException(404, "Team not found")
 @router.post("/teams/join")
 def join_team(payload: JoinTeamRequest, request: Request, authorization: str | None = Header(default=None)):
@@ -140,13 +194,13 @@ def leave_team(team_id: UUID, request: Request, authorization: str | None = Head
     try: membership = platform(request).require_member(user.id, team_id)
     except PermissionError: raise HTTPException(404, "Team not found")
     if membership.role == "OWNER":
-        owners = [m for m in platform(request).memberships.values() if m.team_id == team_id and m.role == "OWNER"]
+        owners = [m for m in platform(request).members_for(team_id) if m.role == "OWNER"]
         if len(owners) == 1: raise HTTPException(409, "Transfer ownership before leaving the team")
-    del platform(request).memberships[(user.id, team_id)]
+    platform(request).leave(user.id, team_id)
     return envelope({"left": True})
 @router.get("/teams/{team_id}/members")
 def members(team_id: UUID, request: Request, authorization: str | None = Header(default=None)):
     user, _, _ = current(request, authorization)
     try: platform(request).require_member(user.id, team_id)
     except PermissionError: raise HTTPException(403, "Forbidden")
-    return envelope([membership for membership in platform(request).memberships.values() if membership.team_id == team_id])
+    return envelope(platform(request).members_for(team_id))

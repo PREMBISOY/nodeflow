@@ -14,7 +14,8 @@ from app.api.routes import router
 from app.core.container import build_container
 from app.services.agent_gateway import AgentGateway
 from app.services.repository import EntityNotFoundError, ProjectKnowledgeRepository
-from app.platform import PlatformStore, SessionCodec, router as platform_router
+from app.platform import PlatformStore, SessionCodec, SqlPlatformStore, router as platform_router
+from app.persistence import SqlAlchemyProjectRepository, build_session_factory
 
 
 logging.basicConfig(level=logging.INFO)
@@ -37,11 +38,17 @@ def create_app(
         version="0.1.0",
         description="Shared project brain, impact analysis, context propagation, messaging, and onboarding.",
     )
+    database_url = os.getenv("DATABASE_URL")
+    platform_store = PlatformStore()
+    if repository is None and database_url:
+        session_factory = build_session_factory(database_url)
+        repository = SqlAlchemyProjectRepository(session_factory())
+        platform_store = SqlPlatformStore(session_factory())
     container = build_container(repository, gateway)
     # Application startup never inserts showcase data. Test code may inject its
     # isolated fixtures directly into an in-memory repository when needed.
     app.state.container = container
-    app.state.platform_store = PlatformStore()
+    app.state.platform_store = platform_store
     app.state.session_codec = SessionCodec()
     origins = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",") if origin.strip()]
     app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["GET", "POST", "OPTIONS"], allow_headers=["Authorization", "Content-Type"])
