@@ -1,64 +1,29 @@
 from __future__ import annotations
-
-import logging
-
+import os
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-
 from app.api.routes import router
-from app.core.container import build_container
-from app.core.demo_data import seed_demo
-from app.services.repository import EntityNotFoundError, InMemoryProjectRepository, ProjectKnowledgeRepository
+from app.core.seed import seed_demo
+from app.db import Base, session_factory
+from app.services.repository import CollaborationService, ContextQueryService, EntityNotFoundError, InMemoryProjectRepository, PermissionDeniedError, SqlAlchemyProjectRepository, StateReplayService
 
-
-logging.basicConfig(level=logging.INFO)
-
-
-def error_response(status_code: int, code: str, message: str) -> JSONResponse:
-    return JSONResponse(
-        status_code=status_code,
-        content={"success": False, "data": None, "error": {"code": code, "message": message}},
-    )
-
-
-def create_app(
-    repository: ProjectKnowledgeRepository | None = None,
-    load_demo_data: bool = True,
-) -> FastAPI:
-    app = FastAPI(
-        title="NodeFlow Core Intelligence API",
-        version="0.1.0",
-        description="Shared project brain, impact analysis, context propagation, messaging, and onboarding.",
-    )
-    container = build_container(repository)
-    if load_demo_data and isinstance(container.repository, InMemoryProjectRepository):
-        seed_demo(container.repository)
-    app.state.container = container
-    app.include_router(router)
-
+def create_app(repository=None, seed: bool = True) -> FastAPI:
+    app=FastAPI(title="NodeFlow Data & Persistence API",version="0.2.0")
+    if repository is None:
+        database_url=os.getenv("DATABASE_URL")
+        if database_url:
+            factory=session_factory(database_url); Base.metadata.create_all(factory.kw["bind"]); repository=SqlAlchemyProjectRepository(factory())
+        else: repository=InMemoryProjectRepository()
+    if seed: seed_demo(repository)
+    app.state.repository=repository; app.state.context_queries=ContextQueryService(repository); app.state.collaboration=CollaborationService(repository); app.state.replay=StateReplayService(repository); app.include_router(router)
     @app.get("/health")
-    def health():
-        return {"success": True, "data": {"status": "ok"}, "error": None}
-
+    def health(): return {"success":True,"data":{"status":"ok"},"error":None}
     @app.exception_handler(EntityNotFoundError)
-    async def not_found_handler(_request: Request, exc: EntityNotFoundError):
-        return error_response(404, "NOT_FOUND", str(exc))
-
+    async def missing(_: Request, exc: EntityNotFoundError): return JSONResponse(404,{"success":False,"data":None,"error":{"code":"NOT_FOUND","message":str(exc)}})
+    @app.exception_handler(PermissionDeniedError)
+    async def forbidden(_: Request, exc: PermissionDeniedError): return JSONResponse(403,{"success":False,"data":None,"error":{"code":"FORBIDDEN","message":str(exc)}})
     @app.exception_handler(RequestValidationError)
-    async def validation_handler(_request: Request, exc: RequestValidationError):
-        message = "; ".join(error["msg"] for error in exc.errors())
-        return error_response(422, "VALIDATION_ERROR", message)
-
-    @app.exception_handler(ValueError)
-    async def value_error_handler(_request: Request, exc: ValueError):
-        return error_response(400, "INVALID_REQUEST", str(exc))
-
-    @app.exception_handler(LookupError)
-    async def lookup_error_handler(_request: Request, exc: LookupError):
-        return error_response(404, "NOT_FOUND", str(exc))
-
+    async def invalid(_: Request, exc: RequestValidationError): return JSONResponse(422,{"success":False,"data":None,"error":{"code":"VALIDATION_ERROR","message":str(exc)}})
     return app
-
-
-app = create_app()
+app=create_app()
