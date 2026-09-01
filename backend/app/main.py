@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router
@@ -13,6 +15,7 @@ from app.core.container import build_container
 from app.core.demo_data import seed_demo
 from app.services.agent_gateway import AgentGateway
 from app.services.repository import EntityNotFoundError, InMemoryProjectRepository, ProjectKnowledgeRepository
+from app.platform import PlatformStore, SessionCodec, router as platform_router
 
 
 logging.basicConfig(level=logging.INFO)
@@ -39,7 +42,12 @@ def create_app(
     if load_demo_data and isinstance(container.repository, InMemoryProjectRepository):
         seed_demo(container.repository)
     app.state.container = container
+    app.state.platform_store = PlatformStore()
+    app.state.session_codec = SessionCodec()
+    origins = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",") if origin.strip()]
+    app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["GET", "POST", "OPTIONS"], allow_headers=["Authorization", "Content-Type"])
     app.include_router(router)
+    app.include_router(platform_router)
 
     @app.get("/health")
     def health():
