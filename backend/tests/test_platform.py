@@ -58,4 +58,4 @@ def test_public_github_repository_connection_is_team_and_project_scoped(monkeypa
     assert connected.status_code == 201
     assert connected.json()['data']['repository']['project_id'] == project['id']
     outsider = register(api, 'Aarya', 'aarya@example.com')
-    assert api.get(f"/api/v1/teams/{team['id']}/github/repositories", headers=auth(outsider)).status_code == 403
+    assert api.get(f"/api/v1/teams/{team['id']}/github/repositories", headers=auth(outsider)).status_code == 404

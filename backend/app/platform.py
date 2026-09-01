@@ -336,7 +336,10 @@ def members(team_id: UUID, request: Request, authorization: str | None = Header(
 
 def active_team_for(request: Request, team_id: UUID, authorization: str | None):
     user, active, _ = current(request, authorization)
-    if active != team_id: raise HTTPException(403, "Select the requested team as active")
+    # A just-created account/team can have a valid session without an active
+    # team claim. Membership is still required; a conflicting active team is
+    # rejected to prevent accidental cross-team requests.
+    if active is not None and active != team_id: raise HTTPException(403, "Select the requested team as active")
     try: platform(request).require_member(user.id, team_id)
     except PermissionError: raise HTTPException(404, "Team not found")
     return user
