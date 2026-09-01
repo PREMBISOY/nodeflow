@@ -26,22 +26,22 @@ def seed_demo(repository: InMemoryProjectRepository) -> None:
     frontend = Component(
         id=DEMO_IDS["frontend"], project_id=project_id, name="Frontend",
         description="User-facing collaborative workspace", kind="application",
-        owner_role="Frontend Engineer", tags=["frontend", "ui"],
+        owner_role="Frontend Engineer", tags=["frontend", "ui", "path:frontend"],
     )
     api = Component(
         id=DEMO_IDS["recommendations_api"], project_id=project_id, name="Recommendations API",
         description="GET /recommendations backend contract", kind="api",
-        owner_role="Backend Engineer", tags=["backend", "api"],
+        owner_role="Backend Engineer", tags=["backend", "api", "path:backend"],
     )
     ml = Component(
         id=DEMO_IDS["ml"], project_id=project_id, name="ML Service",
         description="Produces recommendation candidates", kind="service",
-        owner_role="ML Engineer", tags=["ml", "ai"],
+        owner_role="ML Engineer", tags=["ml", "ai", "path:ml"],
     )
     marketing = Component(
         id=DEMO_IDS["marketing"], project_id=project_id, name="Marketing Site",
         description="Public product information", kind="application",
-        owner_role="Marketing", tags=["marketing"],
+        owner_role="Marketing", tags=["marketing", "path:marketing"],
     )
     frontend_agent = Agent(
         id=DEMO_IDS["frontend_agent"], project_id=project_id, name="Aarya's Agent",

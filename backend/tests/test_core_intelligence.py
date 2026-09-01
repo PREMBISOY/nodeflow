@@ -83,6 +83,21 @@ def test_related_context_includes_dependency_but_excludes_marketing():
     assert names == {"Frontend", "Recommendations API"}
 
 
+def test_task_aware_context_assembles_the_selected_task_with_related_architecture():
+    client = build_client()
+    response = client.get(
+        f"/api/v1/agents/{DEMO_IDS['frontend_agent']}/context",
+        params={"scope": "my_work", "task_id": str(DEMO_IDS["frontend_task"])},
+    )
+
+    assert response.status_code == 200
+    context = response.json()["data"]
+    assert context["requested_task"]["title"] == "Integrate recommendations UI"
+    assert {component["name"] for component in context["components"]} == {
+        "Frontend", "Recommendations API"
+    }
+
+
 def test_agent_message_is_delivered_and_recorded_as_project_history():
     client = build_client()
     before_events = client.get(
@@ -143,6 +158,54 @@ def test_rahul_receives_role_specific_onboarding_from_project_brain():
     assert package["recent_changes"][0]["summary"] == "Added GET /recommendations"
     assert "Welcome Rahul" in package["briefing"]
     assert package["recommended_starting_points"]
+
+
+def test_github_commit_maps_changed_files_to_components_and_notifies_only_relevant_agents():
+    client = build_client()
+    response = client.post(
+        "/api/v1/integrations/github/events",
+        json={
+            "project_id": str(DEMO_IDS["project"]),
+            "event_type": "commit",
+            "repository": "PREMBISOY/nodeflow",
+            "summary": "Add recommendations endpoint",
+            "commit_sha": "abc123",
+            "changed_files": ["backend/recommendations.py", "backend/routes.py"],
+            "actor_name": "Prem",
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()["data"]
+    assert body["event"]["event_type"] == "github_commit"
+    assert body["event"]["payload"]["changed_files"] == [
+        "backend/recommendations.py", "backend/routes.py"
+    ]
+    assert set(body["propagated_to"]) == {
+        str(DEMO_IDS["frontend_agent"]), str(DEMO_IDS["ml_agent"])
+    }
+
+
+def test_collaboration_state_explains_timeline_notifications_and_approval_waiting():
+    client = build_client()
+    client.post(
+        "/api/v1/integrations/github/events",
+        json={
+            "project_id": str(DEMO_IDS["project"]), "event_type": "pull_request",
+            "repository": "PREMBISOY/nodeflow", "summary": "Review recommendations PR",
+            "changed_files": ["backend/routes.py"], "requires_approval": True,
+        },
+    )
+    response = client.get(f"/api/v1/projects/{DEMO_IDS['project']}/collaboration")
+
+    assert response.status_code == 200
+    state = response.json()["data"]
+    assert state["timeline"][0]["event_type"] == "github_pull_request"
+    assert state["notifications"]["total"] == 2
+    assert state["waiting"] == [{
+        "kind": "approval", "id": state["timeline"][0]["id"],
+        "title": "Review recommendations PR", "status": "waiting_approval",
+    }]
 
 
 def test_failures_use_standard_response_shape():

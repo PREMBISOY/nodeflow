@@ -69,6 +69,34 @@ class EventProcessingResult(BaseModel):
     propagated_to: list[UUID]
 
 
+class GitHubEventCreate(BaseModel):
+    project_id: UUID
+    event_type: Literal["commit", "pull_request", "branch"]
+    repository: str
+    summary: str
+    changed_files: list[str] = Field(default_factory=list)
+    ref: str | None = None
+    commit_sha: str | None = None
+    pull_request_number: int | None = None
+    actor_name: str | None = None
+    requires_approval: bool = False
+
+
+class GitHubEventCreate(BaseModel):
+    """A small, provider-neutral GitHub payload used to create Project Intelligence events."""
+
+    project_id: UUID
+    event_type: Literal["commit", "pull_request", "branch"]
+    repository: str
+    summary: str
+    changed_files: list[str] = Field(default_factory=list)
+    ref: str | None = None
+    commit_sha: str | None = None
+    pull_request_number: int | None = None
+    actor_name: str | None = None
+    requires_approval: bool = False
+
+
 class MessageCreate(BaseModel):
     recipient_agent_id: UUID
     message_type: str = "context_update"
