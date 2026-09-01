@@ -50,6 +50,7 @@ def create_app(
     app.state.container = container
     app.state.platform_store = platform_store
     app.state.session_codec = SessionCodec()
+    app.state.enforce_tenants = bool(database_url)
     origins = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",") if origin.strip()]
     app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["GET", "POST", "OPTIONS"], allow_headers=["Authorization", "Content-Type"])
     app.include_router(router)

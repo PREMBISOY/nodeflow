@@ -78,6 +78,9 @@ class PlatformStore:
     def leave(self, user_id: UUID, team_id: UUID) -> None: del self.memberships[(user_id, team_id)]
     def revoke(self, jti: str) -> None: self.revoked.add(jti)
     def is_revoked(self, jti: str) -> bool: return jti in self.revoked
+    def require_project(self, user_id: UUID, team_id: UUID, project_id: UUID) -> None:
+        self.require_member(user_id, team_id)
+        if self.project_teams.get(project_id) != team_id: raise PermissionError("Project is outside the active team")
 
 
 class SqlPlatformStore:
@@ -124,6 +127,10 @@ class SqlPlatformStore:
     def leave(self,user_id: UUID,team_id: UUID) -> None: self.session.execute(text("delete from team_members where user_id=:user and team_id=:team"), {"user":str(user_id),"team":str(team_id)}); self.session.commit()
     def revoke(self,jti: str) -> None: self.session.execute(text("insert into auth_sessions (id,user_id,jti,revoked_at,created_at,expires_at) values (:id,null,:jti,now(),now(),now()) on conflict (jti) do update set revoked_at=now()"), {"id":str(uuid4()),"jti":jti}); self.session.commit()
     def is_revoked(self,jti: str) -> bool: return self.session.execute(text("select 1 from auth_sessions where jti=:jti and revoked_at is not null"), {"jti":jti}).first() is not None
+    def require_project(self,user_id: UUID,team_id: UUID,project_id: UUID) -> None:
+        self.require_member(user_id,team_id)
+        row=self.session.execute(text("select 1 from projects where id=:project and team_id=:team"), {"project":str(project_id),"team":str(team_id)}).first()
+        if not row: raise PermissionError("Project is outside the active team")
 
 
 class SessionCodec:
@@ -151,6 +158,18 @@ def current(request: Request, authorization: str | None = Header(default=None)) 
     except (ValueError, KeyError, PermissionError): raise HTTPException(401, "Invalid session")
     if platform(request).is_revoked(data["jti"]): raise HTTPException(401, "Session revoked")
     return user, UUID(data["team"]) if data.get("team") else None, data
+
+def require_project_access(request: Request, project_id: UUID, authorization: str | None = None) -> None:
+    """Production-only boundary used by Prem's existing routes.
+
+    Tests and local engine development remain explicitly unguarded unless a
+    DATABASE_URL-backed deployment has enabled tenant enforcement.
+    """
+    if not request.app.state.enforce_tenants: return
+    user, active_team, _ = current(request, authorization)
+    if active_team is None: raise HTTPException(403, "Select an active team")
+    try: platform(request).require_project(user.id, active_team, project_id)
+    except PermissionError: raise HTTPException(404, "Project not found")
 
 @router.post("/auth/register", status_code=201)
 def register(payload: RegisterRequest, request: Request):

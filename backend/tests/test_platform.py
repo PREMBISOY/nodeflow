@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 from app.main import create_app
+from tests.fixtures.demo_data import DEMO_IDS, seed_demo
 
 def client(): return TestClient(create_app(load_demo_data=False))
 def register(client, name, email): return client.post('/api/v1/auth/register', json={'name': name, 'email': email, 'password': 'secure-password'}).json()['data']['access_token']
@@ -18,3 +19,12 @@ def test_join_is_idempotent_and_non_members_cannot_read_members():
     guest=register(api, 'Aarya', 'aarya@example.com'); joined=api.post('/api/v1/teams/join', json={'team_code':team['team_code']}, headers=auth(guest)); assert joined.status_code == 200
     assert api.post('/api/v1/teams/join', json={'team_code':team['team_code']}, headers=auth(guest)).status_code == 200
     outsider=register(api, 'Sunal', 'sunal@example.com'); assert api.get(f"/api/v1/teams/{team['id']}/members", headers=auth(outsider)).status_code == 403
+
+def test_active_team_blocks_cross_tenant_project_agent_and_event_access():
+    app=create_app(); seed_demo(app.state.container.repository); app.state.enforce_tenants=True
+    api=TestClient(app); token=register(api, 'Prem', 'prem@example.com'); store=app.state.platform_store; user=store.login(type('Login', (), {'email':'prem@example.com','password':'secure-password'})())
+    team_a=store.create_team(user, 'Team A'); team_b=store.create_team(user, 'Team B'); store.project_teams[DEMO_IDS['project']]=team_a.id
+    team_a_token=app.state.session_codec.issue(user.id, team_a.id); team_b_token=app.state.session_codec.issue(user.id, team_b.id)
+    assert api.get(f"/api/v1/projects/{DEMO_IDS['project']}", headers=auth(team_a_token)).status_code == 200
+    assert api.get(f"/api/v1/agents/{DEMO_IDS['frontend_agent']}/updates", headers=auth(team_b_token)).status_code == 404
+    assert api.post('/api/v1/events', headers=auth(team_b_token), json={'project_id':str(DEMO_IDS['project']),'event_type':'test','summary':'blocked'}).status_code == 404
