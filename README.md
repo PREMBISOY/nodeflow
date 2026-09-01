@@ -30,3 +30,7 @@ cd backend
 ```
 
 The development app starts with deterministic golden-demo data. See [docs/demo.md](docs/demo.md) for IDs and a complete walkthrough. The in-memory adapter is intentionally behind a repository protocol so the persistence and agent-gateway owners can replace adapters without rewriting intelligence logic.
+
+## Agent transport and CLI bridge
+
+The provider-neutral transport adapter and UUID-based local bridge use the existing shared API contracts. See [agent gateway documentation](docs/agent-gateway.md).
