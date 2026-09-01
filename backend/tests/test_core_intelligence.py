@@ -209,6 +209,57 @@ def test_collaboration_state_explains_timeline_notifications_and_approval_waitin
     }]
 
 
+def test_human_can_resolve_an_approval_request_once_and_state_reflects_decision():
+    client = build_client()
+    created = client.post(
+        "/api/v1/integrations/github/events",
+        json={
+            "project_id": str(DEMO_IDS["project"]), "event_type": "pull_request",
+            "action": "opened", "repository": "PREMBISOY/nodeflow",
+            "summary": "Review recommendations PR", "changed_files": ["backend/routes.py"],
+        },
+    ).json()["data"]["event"]
+    response = client.post(
+        f"/api/v1/projects/{DEMO_IDS['project']}/collaboration/approvals/{created['id']}",
+        json={"project_id": str(DEMO_IDS["project"]), "decision": "approved",
+              "actor_name": "Prem", "comment": "API contract looks good."},
+    )
+
+    assert response.status_code == 200
+    state = client.get(f"/api/v1/projects/{DEMO_IDS['project']}/collaboration").json()["data"]
+    assert state["approvals"] == [{
+        "id": created["id"], "title": "Review recommendations PR", "status": "approved",
+        "component_ids": [str(DEMO_IDS["recommendations_api"])],
+    }]
+    assert state["waiting"] == []
+    duplicate = client.post(
+        f"/api/v1/projects/{DEMO_IDS['project']}/collaboration/approvals/{created['id']}",
+        json={"project_id": str(DEMO_IDS["project"]), "decision": "rejected", "actor_name": "Prem"},
+    )
+    assert duplicate.status_code == 400
+
+
+def test_git_activity_normalizes_pr_review_and_merge_flow_stages():
+    client = build_client()
+    for action in ["opened", "merged"]:
+        response = client.post(
+            "/api/v1/integrations/github/events",
+            json={
+                "project_id": str(DEMO_IDS["project"]), "event_type": "pull_request", "action": action,
+                "repository": "PREMBISOY/nodeflow", "summary": f"Recommendations PR {action}",
+                "pull_request_number": 42, "changed_files": ["backend/routes.py"],
+            },
+        )
+        assert response.status_code == 201
+
+    activity = client.get(f"/api/v1/projects/{DEMO_IDS['project']}/git/activity").json()["data"]
+    by_action = {item["action"]: item for item in activity}
+    assert by_action["merged"]["flow_stage"] == "merged"
+    assert by_action["merged"]["requires_approval"] is False
+    assert by_action["opened"]["flow_stage"] == "review_required"
+    assert by_action["opened"]["requires_approval"] is True
+
+
 def test_failures_use_standard_response_shape():
     client = build_client()
     response = client.get("/api/v1/projects/99999999-9999-9999-9999-999999999999")

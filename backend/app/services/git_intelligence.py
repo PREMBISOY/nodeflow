@@ -21,7 +21,9 @@ class GitIntelligenceService:
             "provider": "github", "repository": request.repository, "ref": request.ref,
             "commit_sha": request.commit_sha, "pull_request_number": request.pull_request_number,
             "actor_name": request.actor_name, "changed_files": request.changed_files,
-            "requires_approval": request.requires_approval,
+            "action": request.action,
+            "requires_approval": self._requires_approval(request),
+            "flow_stage": self._flow_stage(request),
         }
         if not component_ids:
             return self.events.process(EventCreate(
@@ -59,3 +61,32 @@ class GitIntelligenceService:
             (agent.id for agent in agents if set(agent.component_ids).intersection(component_ids)),
             None,
         )
+
+    def get_activity(self, project_id):
+        self.repository.get_project(project_id)
+        return [
+            {"id": event.id, "event_type": event.event_type, "summary": event.summary,
+             "created_at": event.created_at, "component_ids": event.component_ids,
+             "repository": event.payload.get("repository"), "ref": event.payload.get("ref"),
+             "commit_sha": event.payload.get("commit_sha"), "pull_request_number": event.payload.get("pull_request_number"),
+             "action": event.payload.get("action"), "flow_stage": event.payload.get("flow_stage"),
+             "requires_approval": bool(event.payload.get("requires_approval"))}
+            for event in self.repository.list_events(project_id, limit=100)
+            if event.payload.get("provider") == "github"
+        ]
+
+    @staticmethod
+    def _requires_approval(request: GitHubEventCreate) -> bool:
+        if request.requires_approval is not None:
+            return request.requires_approval
+        return request.event_type == "pull_request" and request.action in {"opened", "synchronized"}
+
+    @staticmethod
+    def _flow_stage(request: GitHubEventCreate) -> str:
+        if request.event_type == "pull_request" and request.action == "merged":
+            return "merged"
+        if request.event_type == "pull_request" and request.action in {"opened", "synchronized"}:
+            return "review_required"
+        if request.event_type == "commit":
+            return "change_detected"
+        return "branch_updated"

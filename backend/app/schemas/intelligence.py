@@ -75,6 +75,7 @@ class GitHubEventCreate(BaseModel):
 
     project_id: UUID
     event_type: Literal["commit", "pull_request", "branch"]
+    action: Literal["created", "updated", "opened", "synchronized", "merged", "closed"] | None = None
     repository: str
     summary: str
     changed_files: list[str] = Field(default_factory=list)
@@ -82,7 +83,14 @@ class GitHubEventCreate(BaseModel):
     commit_sha: str | None = None
     pull_request_number: int | None = None
     actor_name: str | None = None
-    requires_approval: bool = False
+    requires_approval: bool | None = None
+
+
+class ApprovalDecisionCreate(BaseModel):
+    project_id: UUID
+    decision: Literal["approved", "rejected"]
+    actor_name: str
+    comment: str = ""
 
 
 class MessageCreate(BaseModel):
