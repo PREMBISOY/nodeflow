@@ -155,7 +155,13 @@ def build_session_factory(database_url: str):
     """Create a SQLAlchemy factory; production URL is PostgreSQL/Supabase."""
     if database_url.startswith("postgresql://"):
         database_url = database_url.replace("postgresql://", "postgresql+psycopg://", 1)
-    return sessionmaker(create_engine(database_url, pool_pre_ping=True), expire_on_commit=False)
+    # Supabase's pooled endpoint uses PgBouncer transaction pooling. psycopg's
+    # server-side prepared statements are connection-local and can collide when
+    # PgBouncer reuses a server connection across client sessions.
+    engine_options = {"pool_pre_ping": True}
+    if database_url.startswith("postgresql+psycopg://"):
+        engine_options["connect_args"] = {"prepare_threshold": None}
+    return sessionmaker(create_engine(database_url, **engine_options), expire_on_commit=False)
 
 
 class SqlAlchemyProjectRepository:
