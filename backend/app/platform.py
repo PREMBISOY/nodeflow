@@ -36,7 +36,7 @@ from uuid import UUID, uuid4
 import httpx
 from fastapi import APIRouter, Cookie, Header, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, EmailStr
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -109,6 +109,10 @@ class JoinTeamRequest(BaseModel):
 class ActiveTeamRequest(BaseModel):
     team_id: UUID
 
+
+class TeamMemberAddRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=300)
+    role: str = Field(default="MEMBER", pattern=r"^(ADMIN|MEMBER)$")
 
 class ChangeMemberRoleRequest(BaseModel):
     role: str = Field(pattern=r"^(ADMIN|MEMBER)$")
@@ -344,8 +348,23 @@ class PlatformStore:
     def get_team(self, team_id: UUID) -> Team:
         return self.teams[team_id]
 
+    def user_for_email(self, email: str) -> User | None:
+        for u in self.users.values():
+            if u.email.lower() == email.lower():
+                return u
+        return None
+
     def members_for(self, team_id: UUID) -> list[Membership]:
         return [m for m in self.memberships.values() if m.team_id == team_id]
+
+    def add_member(self, acting_user_id: UUID, team_id: UUID, target_user_id: UUID, role: str) -> Membership:
+        acting = self.require_member(acting_user_id, team_id)
+        Policy.require(acting.role, "change_member_role", "MEMBER")
+        if (target_user_id, team_id) in self.memberships:
+            raise LookupError("Already a member")
+        m = Membership(id=uuid4(), team_id=team_id, user_id=target_user_id, role=role, joined_at=datetime.utcnow())
+        self.memberships[(target_user_id, team_id)] = m
+        return m
 
     def leave(self, user_id: UUID, team_id: UUID) -> None:
         del self.memberships[(user_id, team_id)]
@@ -703,12 +722,31 @@ class SqlPlatformStore:
             raise KeyError(team_id)
         return self._team(row)
 
+    def user_for_email(self, email: str) -> User | None:
+        row = self.session.execute(
+            text("SELECT id,github_id,login,name,email FROM users WHERE email=:e"),
+            {"e": email.lower()},
+        ).first()
+        return self._user(row) if row else None
+
     def members_for(self, team_id: UUID) -> list[Membership]:
         rows = self.session.execute(
             text("SELECT id,team_id,user_id,role,joined_at FROM team_members WHERE team_id=:t"),
             {"t": str(team_id)},
         )
         return [self._membership(row) for row in rows]
+
+    def add_member(self, acting_user_id: UUID, team_id: UUID, target_user_id: UUID, role: str) -> Membership:
+        acting = self.require_member(acting_user_id, team_id)
+        Policy.require(acting.role, "change_member_role", "MEMBER")
+        try:
+            row = self.session.execute(
+                text("INSERT INTO team_members (id,team_id,user_id,role) VALUES (:id,:t,:u,:role) RETURNING id,team_id,user_id,role,joined_at"),
+                {"id": str(uuid4()), "t": str(team_id), "u": str(target_user_id), "role": role},
+            ).first()
+            return self._membership(row)
+        except Exception:
+            raise LookupError("Failed to add member")
 
     def leave(self, user_id: UUID, team_id: UUID) -> None:
         self.session.execute(
@@ -1468,15 +1506,46 @@ def members(
     authorization: str | None = Header(default=None),
 ):
     user, _, _ = current(request, authorization)
+    ps = platform(request)
     try:
-        platform(request).require_member(user.id, team_id)
+        ps.require_member(user.id, team_id)
     except PermissionError:
         raise HTTPException(403, "Forbidden")
-    return envelope([
-        m.model_dump(mode="json")
-        for m in platform(request).members_for(team_id)
-    ])
+    return envelope([{
+        "id": m.user_id,
+        "user_id": m.user_id,
+        "name": ps.get_user(m.user_id).name,
+        "email": ps.get_user(m.user_id).email,
+        "role": m.role,
+        "joined_at": m.joined_at,
+    } for m in ps.members_for(team_id)])
 
+
+@router.post("/teams/{team_id}/members", status_code=201)
+def add_team_member(
+    team_id: UUID, payload: TeamMemberAddRequest, request: Request,
+    authorization: str | None = Header(default=None),
+):
+    user, _, _ = current(request, authorization)
+    ps = platform(request)
+    target = ps.user_for_email(payload.email)
+    if not target:
+        raise HTTPException(404, "No NodeFlow account exists for that email")
+    try:
+        membership = ps.add_member(user.id, team_id, target.id, payload.role.upper())
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+    except LookupError as exc:
+        raise HTTPException(405, str(exc))
+    
+    return envelope({
+        "id": membership.user_id,
+        "user_id": membership.user_id,
+        "name": target.name,
+        "email": target.email,
+        "role": membership.role,
+        "joined_at": membership.joined_at
+    })
 
 @router.patch("/teams/{team_id}/members/{target_user_id}")
 def change_member_role(
