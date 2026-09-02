@@ -20,8 +20,10 @@ import logging
 import os
 from contextvars import ContextVar
 from pathlib import Path
+from contextlib import asynccontextmanager
 from uuid import uuid4
 
+# NodeFlow Demo: Context-aware backend entrypoint
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
